@@ -20,7 +20,12 @@ swift_target="$(uname -m)-apple-macos$MACOSX_DEPLOYMENT_TARGET"
     module_dir=$(go list -m -f '{{.Dir}}' "github.com/ganeshrvel/$module")
     cp "$module_dir/LICENSE" "../$contents/Resources/$module-LICENSE"
   done
-  cp "$(go env GOROOT)/LICENSE" "../$contents/Resources/Go-LICENSE"
+  go_root=$(go env GOROOT)
+  go_license="$go_root/LICENSE"
+  if [[ ! -f "$go_license" ]]; then
+    go_license="$(dirname "$go_root")/LICENSE"
+  fi
+  cp "$go_license" "../$contents/Resources/Go-LICENSE"
 )
 libusb=$(pkg-config --variable=libdir libusb-1.0)
 dependency=$(otool -L "$contents/MacOS/android-mtp" | awk '/libusb/ {print $1}')
