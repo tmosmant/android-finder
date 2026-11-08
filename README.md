@@ -19,7 +19,7 @@ The Xcode Command Line Tools are required (`xcode-select --install`). Connect on
 - Drag items into Finder to copy them to your Mac or an external drive.
 - Delete selected items after confirmation. Deletion on Android is permanent.
 
-The interface uses AppKit. A bundled Go helper communicates with the phone via [go-mtpx](https://github.com/ganeshrvel/go-mtpx). The app uses the first storage volume exposed by the phone and displays the current operation.
+The interface uses AppKit. A bundled Go helper communicates with the phone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). The app uses the first storage volume exposed by the phone and displays the current operation.
 
 ## Keyboard shortcuts
 
@@ -46,3 +46,17 @@ When copying to the Mac, the app stages each item and places it at its final des
 - The Android Finder source contains no telemetry, cloud service, or automatic updater. Transfers use USB. Quick Look uses temporary local copies that are removed on normal exit.
 - Review the [interface and transfer code](Sources/), [USB helper](mtp/), and [optional launch agent](Watcher/main.swift). The agent detects local MTP interfaces and opens the app.
 - If you have access to the repository, check out a specific commit and build it locally using the commands above. For a DMG accompanied by a `.sha256` file, put both files in the same directory and run `shasum -a 256 -c "Android Finder.dmg.sha256"`. Compare the digest with one obtained through a trusted channel. A matching digest verifies the file’s bytes. The package uses ad hoc signing for local code integrity checks. Publisher identity requires a Developer ID signature.
+
+### Verify a GitHub release
+
+Download the Apple Silicon DMG and its checksum from [Releases](https://github.com/tmosmant/android-finder/releases). The [build workflow](.github/workflows/release.yml) runs on a GitHub-hosted Mac and attests the DMG against its source commit. With the GitHub CLI, check both the digest and the provenance from your download folder.
+
+```sh
+shasum -a 256 -c "Android Finder.dmg.sha256"
+gh attestation verify "Android Finder.dmg" \
+  --repo tmosmant/android-finder \
+  --signer-workflow tmosmant/android-finder/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+The provenance shows where the file was built and which source revision it came from. Reviewing that revision is a separate check.

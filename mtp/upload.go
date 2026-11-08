@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
-	mtpx "github.com/ganeshrvel/go-mtpx"
 )
 
 func uploadSelection(device *mtp.Device, storage, parent uint32, sources []string) error {
@@ -23,11 +22,10 @@ func uploadSelection(device *mtp.Device, storage, parent uint32, sources []strin
 
 func uploadItem(device *mtp.Device, storage, parent uint32, source string) error {
 	name := filepath.Base(source)
-	if _, err := mtpx.GetObjectFromParentIdAndFilename(device, storage, parent, name); err == nil {
+	if _, err := findChild(device, storage, parent, "", name); err == nil {
 		return fmt.Errorf("cet élément existe déjà : %s", name)
 	} else {
-		var missing mtpx.FileNotFoundError
-		if !errors.As(err, &missing) {
+		if !errors.Is(err, errObjectMissing) {
 			return err
 		}
 	}

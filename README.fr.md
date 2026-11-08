@@ -19,7 +19,7 @@ Les outils en ligne de commande Xcode sont requis (`xcode-select --install`). Br
 - Glisse des éléments vers le Finder pour les copier vers le Mac ou un disque externe.
 - Supprime une sélection depuis la fenêtre après confirmation. La suppression sur Android est définitive.
 
-La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le téléphone via [go-mtpx](https://github.com/ganeshrvel/go-mtpx). Cette première version utilise le premier stockage exposé par le téléphone et affiche un état pendant les opérations.
+La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le téléphone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). Cette première version utilise le premier stockage exposé par le téléphone et affiche un état pendant les opérations.
 
 ## Raccourcis clavier
 
@@ -46,3 +46,17 @@ Vers le Mac, l’app copie chaque fichier ou dossier dans un emplacement tempora
 - Le code d’Android Finder ne contient ni télémétrie, ni service cloud, ni mise à jour automatique. Les transferts passent par l’USB. Les aperçus sont copiés dans un cache temporaire sur le Mac, supprimé à la fermeture normale.
 - Tu peux inspecter [l’interface et les transferts](Sources/), [le moteur USB](mtp/) et [l’agent de lancement](Watcher/main.swift). L’agent est facultatif. Il détecte les interfaces MTP locales et ouvre l’app.
 - Si tu as accès au dépôt, tu peux compiler depuis un commit précis avec les commandes ci-dessus. Pour vérifier un DMG accompagné de son fichier `.sha256`, place les deux dans le même dossier et lance `shasum -a 256 -c "Android Finder.dmg.sha256"`. Compare l’empreinte à celle publiée par un canal de confiance. L’empreinte vérifie les octets du fichier. La signature ad hoc du paquet permet de vérifier son intégrité localement. L’identité de l’éditeur requiert une signature Developer ID.
+
+### Vérifier une version GitHub
+
+Télécharge le DMG Apple Silicon et son empreinte depuis les [versions publiées](https://github.com/tmosmant/android-finder/releases). Le [workflow de compilation](.github/workflows/release.yml) s’exécute sur un Mac hébergé par GitHub et associe le DMG à son commit source dans une attestation. Avec GitHub CLI, vérifie l’empreinte et l’attestation depuis ton dossier de téléchargement.
+
+```sh
+shasum -a 256 -c "Android Finder.dmg.sha256"
+gh attestation verify "Android Finder.dmg" \
+  --repo tmosmant/android-finder \
+  --signer-workflow tmosmant/android-finder/.github/workflows/release.yml \
+  --deny-self-hosted-runners
+```
+
+L’attestation indique où le fichier a été compilé et à partir de quelle révision. Le code de cette révision peut être examiné séparément.

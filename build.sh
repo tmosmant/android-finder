@@ -16,6 +16,11 @@ swift_target="$(uname -m)-apple-macos$MACOSX_DEPLOYMENT_TARGET"
 (
   cd mtp
   go build -o "../$contents/MacOS/android-mtp" .
+  for module in go-mtpfs usb; do
+    module_dir=$(go list -m -f '{{.Dir}}' "github.com/ganeshrvel/$module")
+    cp "$module_dir/LICENSE" "../$contents/Resources/$module-LICENSE"
+  done
+  cp "$(go env GOROOT)/LICENSE" "../$contents/Resources/Go-LICENSE"
 )
 libusb=$(pkg-config --variable=libdir libusb-1.0)
 dependency=$(otool -L "$contents/MacOS/android-mtp" | awk '/libusb/ {print $1}')
@@ -25,6 +30,9 @@ install_name_tool -id '@rpath/libusb-1.0.0.dylib' "$contents/Frameworks/libusb-1
 install_name_tool -change "$dependency" '@executable_path/../Frameworks/libusb-1.0.0.dylib' "$contents/MacOS/android-mtp"
 libusb_prefix=$(pkg-config --variable=prefix libusb-1.0)
 cp "$libusb_prefix/COPYING" "$contents/Resources/libusb-COPYING"
+if [[ -n "${ANDROID_FINDER_LIBUSB_SOURCE:-}" ]]; then
+  cp "$ANDROID_FINDER_LIBUSB_SOURCE" "$contents/Resources/"
+fi
 swiftc -target "$swift_target" -module-cache-path "$PWD/.build/modules" Sources/*.swift -o "$contents/MacOS/Android Finder"
 swiftc -target "$swift_target" -module-cache-path "$PWD/.build/modules" Watcher/main.swift -o "$contents/MacOS/android-usb-watcher"
 cp Info.plist "$contents/"

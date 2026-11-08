@@ -1,0 +1,66 @@
+name: Build and attest macOS DMG
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: mtp/go.sum
+      - name: Build pinned libusb
+        shell: bash
+        run: |
+          brew install pkgconf
+          build_dir="$RUNNER_TEMP/libusb"
+          mkdir -p "$build_dir"
+          cd "$build_dir"
+          archive=libusb-1.0.30.tar.bz2
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/libusb/libusb/releases/download/v1.0.30/$archive" -o "$archive"
+          echo "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf  $archive" | shasum -a 256 -c
+          tar -xjf "$archive"
+          cd libusb-1.0.30
+          export MACOSX_DEPLOYMENT_TARGET=13.0
+          ./configure --disable-dependency-tracking --prefix="$build_dir/prefix"
+          make -j "$(sysctl -n hw.ncpu)"
+          make install
+          cp COPYING "$build_dir/prefix/"
+          echo "PKG_CONFIG_PATH=$build_dir/prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "ANDROID_FINDER_LIBUSB_SOURCE=$build_dir/$archive" >> "$GITHUB_ENV"
+      - name: Build and verify disk image
+        shell: bash
+        run: |
+          (cd mtp && go test -mod=readonly ./...)
+          mkdir -p dist
+          ./package.sh "$PWD/dist/Android Finder.dmg"
+          cd dist
+          hdiutil verify "Android Finder.dmg"
+          shasum -a 256 "Android Finder.dmg" > "Android Finder.dmg.sha256"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: 'dist/Android Finder.dmg'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-finder-macos-arm64
+          path: |
+            dist/Android Finder.dmg
+            dist/Android Finder.dmg.sha256
+          if-no-files-found: error
