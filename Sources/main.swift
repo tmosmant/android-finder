@@ -4,18 +4,7 @@ import ServiceManagement
 import UniformTypeIdentifiers
 
 final class BrowserView: NSCollectionView {
-    var preview: (() -> Void)?
     var openSelection: (() -> Void)?
-    var deleteSelection: (() -> Void)?
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 49: preview?()
-        case 36, 76: openSelection?()
-        case 51, 117: deleteSelection?()
-        default: super.keyDown(with: event)
-        }
-    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
@@ -94,8 +83,7 @@ final class FilePromise: NSObject, NSFilePromiseProviderDelegate {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout,
-                 QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
     private let mtp = MTP()
     private let usbAgent = SMAppService.agent(plistName: "com.tmosmant.android-finder.usb.plist")
     private let browser = BrowserView()
@@ -108,7 +96,22 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private var entries: [AndroidEntry] = []
     private var icons = false
     private var busy = false
-    private var previewURL: URL?
+    private var keyMonitor: Any?
+    private lazy var previewView = QLPreviewView(frame: .zero, style: .normal)!
+    private lazy var previewPanel: NSPanel = {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 460),
+                            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                            backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = previewView
+        panel.center()
+        return panel
+    }()
+    private var previewURL: URL? {
+        didSet { previewView.previewItem = previewURL as NSURL? }
+    }
+    private var previewPath: String?
+    private var previewLoading = false
     private let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -126,9 +129,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         browser.allowsMultipleSelection = true
         browser.registerForDraggedTypes([.fileURL])
         browser.setDraggingSourceOperationMask(.copy, forLocal: false)
-        browser.preview = { [weak self] in self?.preview() }
         browser.openSelection = { [weak self] in self?.openSelection() }
-        browser.deleteSelection = { [weak self] in self?.deleteSelection() }
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -175,6 +176,9 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         appMenu.addItem(withTitle: "Quitter Android Finder", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         NSApp.mainMenu = mainMenu
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event) == true ? nil : event
+        }
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(browser)
@@ -212,6 +216,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         try? FileManager.default.removeItem(at: cache)
     }
 
@@ -226,7 +231,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     @objc private func refresh() { navigate(path) }
 
-    private func navigate(_ destination: String) {
+    private func navigate(_ destination: String, selecting child: String? = nil, focusFiles: Bool = false) {
         guard !busy else { return }
         busy = true
         status.stringValue = "Lecture du téléphone…"
@@ -243,11 +248,17 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
                 self.browser.reloadData()
                 self.updatePath()
                 self.status.stringValue = "\(self.entries.count) éléments"
+                if focusFiles {
+                    self.window.makeFirstResponder(self.browser)
+                    self.selectEntry(at: self.entries.firstIndex { $0.FullPath == child } ?? 0)
+                }
+                self.updatePreview()
             case .failure(let error):
                 self.entries = []
                 self.browser.reloadData()
                 self.status.stringValue = "Vérifie que le téléphone est déverrouillé et en mode Transfert de fichiers. \(error.localizedDescription)"
                 self.status.toolTip = self.status.stringValue
+                self.updatePreview()
             }
         }
     }
@@ -285,7 +296,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     private func openSelection() {
         guard let item = selection.first else { return }
-        if item.IsDir { navigate(item.FullPath) } else { preview() }
+        if item.IsDir { navigate(item.FullPath, focusFiles: true) } else { showPreview() }
     }
 
     @objc private func deleteSelection() {
@@ -338,14 +349,118 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         }
     }
 
-    private func preview() {
-        if QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared(), panel.isVisible {
-            panel.orderOut(nil)
+    private var visiblePreview: NSPanel? { previewPanel.isVisible ? previewPanel : nil }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let panel = visiblePreview
+        let inPreview = panel != nil && event.window === panel
+        guard window.attachedSheet == nil, event.window === window || inPreview else { return false }
+
+        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if modifiers == .command {
+            switch event.keyCode {
+            case 126:
+                if path != "/" {
+                    navigate((path as NSString).deletingLastPathComponent, selecting: path, focusFiles: true)
+                }
+                return true
+            case 125:
+                openSelection()
+                return true
+            case 15: // R
+                refresh()
+                return true
+            default:
+                return false
+            }
+        }
+        guard modifiers.isEmpty else { return false }
+        let focused = window.firstResponder === browser
+        switch event.keyCode {
+        case 123...126:
+            if !focused && !inPreview {
+                window.makeFirstResponder(browser)
+                selectEntry(at: 0)
+            } else {
+                moveSelection(with: event)
+            }
+            return true
+        case 49 where focused || inPreview:
+            if !event.isARepeat {
+                if let panel { panel.close() } else { showPreview() }
+            }
+            return true
+        case 53 where panel != nil:
+            panel?.close()
+            return true
+        case 36, 76:
+            guard focused || inPreview else { return false }
+            openSelection()
+            return true
+        case 51, 117:
+            guard focused || inPreview else { return false }
+            if !event.isARepeat {
+                panel?.close()
+                deleteSelection()
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func moveSelection(with event: NSEvent) {
+        guard !entries.isEmpty else { return }
+        guard let current = browser.selectionIndexPaths.sorted().first?.item else {
+            selectEntry(at: 0)
             return
         }
-        guard !busy, let item = selection.first, !item.IsDir else { return }
-        busy = true
-        status.stringValue = "Préparation de l’aperçu…"
+        if icons {
+            // AppKit uses the actual grid layout, including a partially filled last row.
+            browser.keyDown(with: event)
+            updatePreview()
+        } else {
+            switch event.keyCode {
+            case 125: selectEntry(at: min(current + 1, entries.count - 1))
+            case 126: selectEntry(at: max(current - 1, 0))
+            default: break
+            }
+        }
+    }
+
+    private func selectEntry(at index: Int) {
+        if entries.indices.contains(index) {
+            let item = IndexPath(item: index, section: 0)
+            browser.selectionIndexPaths = [item]
+            browser.scrollToItems(at: [item], scrollPosition: .nearestVerticalEdge)
+        }
+        updatePreview()
+    }
+
+    private func showPreview() {
+        guard let item = selection.first, !item.IsDir else { return }
+        let panel = previewPanel
+        if !panel.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(browser)
+            previewPath = nil
+            previewURL = nil
+            panel.orderFront(nil)
+        }
+        updatePreview()
+    }
+
+    private func updatePreview() {
+        guard let panel = visiblePreview else { return }
+        let item = selection.first.flatMap { $0.IsDir ? nil : $0 }
+        if previewPath != item?.FullPath {
+            previewPath = nil
+            previewURL = nil
+            panel.title = item.map { "Aperçu — " + $0.Name } ?? "Aperçu"
+        }
+        guard let item, previewPath != item.FullPath, !previewLoading else { return }
+        previewLoading = true
+        if !busy { status.stringValue = "Préparation de l’aperçu…" }
         mtp.perform({
             let folder = self.cache.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -353,25 +468,36 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             try self.mtp.download(item, to: url)
             return url
         }) { result in
-            self.busy = false
-            self.status.stringValue = "\(self.entries.count) éléments"
+            self.previewLoading = false
+            if !self.busy { self.status.stringValue = "\(self.entries.count) éléments" }
+            guard self.visiblePreview != nil else { return }
+            guard self.selection.first?.FullPath == item.FullPath else {
+                self.updatePreview()
+                return
+            }
             switch result {
             case .success(let url):
+                self.previewPath = item.FullPath
                 self.previewURL = url
-                self.window.makeFirstResponder(self.browser)
-                QLPreviewPanel.shared()?.makeKeyAndOrderFront(nil)
             case .failure(let error):
-                self.present(error)
+                if !self.busy {
+                    self.status.stringValue = "Aperçu indisponible. \(error.localizedDescription)"
+                    self.status.toolTip = self.status.stringValue
+                }
             }
         }
     }
 
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { previewURL == nil ? 0 : 1 }
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { previewURL as NSURL? }
-    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
-        guard event.type == .keyDown, event.keyCode == 49 else { return false }
-        panel.orderOut(nil)
-        return true
+    func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
+        updatePreviewAfterSelection()
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
+        updatePreviewAfterSelection()
+    }
+
+    private func updatePreviewAfterSelection() {
+        DispatchQueue.main.async { [weak self] in self?.updatePreview() }
     }
 
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -425,22 +551,6 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
                   options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
         mutate(["upload", path] + urls.map(\.path), status: "Copie vers le téléphone…")
         return true
-    }
-}
-
-extension BrowserView {
-    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
-        NSApp.delegate is App
-    }
-
-    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = NSApp.delegate as? App
-        panel.delegate = NSApp.delegate as? App
-    }
-
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = nil
-        panel.delegate = nil
     }
 }
 

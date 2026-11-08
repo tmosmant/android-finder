@@ -19,6 +19,16 @@ Les outils en ligne de commande Xcode sont requis (`xcode-select --install`). Br
 
 La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le téléphone via [go-mtpx](https://github.com/ganeshrvel/go-mtpx). Cette première version utilise le premier stockage exposé par le téléphone et affiche un état pendant les opérations.
 
+## Raccourcis clavier
+
+- **↑ / ↓** — parcourir la liste. En vue Icônes, les quatre flèches suivent la grille.
+- **Une flèche hors de la zone de fichiers** — remettre le focus sur les fichiers et sélectionner le premier élément.
+- **⌘ ↑** — remonter au dossier parent et resélectionner le dossier quitté.
+- **Retour** ou **⌘ ↓** — ouvrir le dossier sélectionné ou prévisualiser le fichier.
+- **Espace** — ouvrir ou fermer Quick Look. Les flèches continuent de changer la sélection et l’aperçu suit. **Échap** ferme aussi l’aperçu.
+- **⌫** — demander la suppression de la sélection.
+- **⌘ R** — actualiser le dossier courant. **⌘ Q** — quitter l’app.
+
 ## Installation et lancement USB
 
 Ouvre l’image disque et glisse l’app dans **Applications**. Dans le menu **Android Finder**, clique sur **Ouverture automatique sur USB…**. Si macOS le demande, autorise l’agent Android Finder dans **Réglages Système → Général → Ouverture et extensions**. L’agent ouvre l’app dès qu’il détecte une nouvelle interface USB nommée MTP. Si le téléphone se branche en mode recharge, choisis **Transfert de fichiers**. Le même menu permet de désactiver l’agent.
