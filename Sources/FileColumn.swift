@@ -7,12 +7,12 @@ enum FileColumn: String, CaseIterable {
     case modified = "Modifié"
     case created = "Créé"
 
-    var width: CGFloat? {
+    var minimumWidth: CGFloat {
         switch self {
-        case .name: nil
-        case .kind: 112
-        case .size: 75
-        case .modified, .created: 112
+        case .name: 120
+        case .kind: 78
+        case .size: 62
+        case .modified, .created: 92
         }
     }
 
@@ -50,5 +50,29 @@ enum FileColumn: String, CaseIterable {
     private static func kind(for entry: AndroidEntry) -> String {
         if entry.IsDir { return "Dossier" }
         return fileType(entry).localizedDescription ?? "Fichier"
+    }
+}
+
+final class ColumnDivider: NSView {
+    var beginResize: (() -> Void)?
+    var resize: ((CGFloat) -> Void)?
+    private var startX: CGFloat = 0
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        startX = event.locationInWindow.x
+        beginResize?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        resize?(event.locationInWindow.x - startX)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        NSRect(x: bounds.midX, y: 3, width: 1, height: max(0, bounds.height - 6)).fill()
     }
 }

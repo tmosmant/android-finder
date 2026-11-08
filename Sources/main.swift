@@ -17,6 +17,7 @@ final class BrowserView: NSCollectionView {
 
 final class FileItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("file")
+    private var columnConstraints: [NSLayoutConstraint] = []
 
     override func loadView() {
         view = NSView()
@@ -24,7 +25,9 @@ final class FileItem: NSCollectionViewItem {
         view.layer?.cornerRadius = 5
     }
 
-    func configure(_ entry: AndroidEntry, icons: Bool, searchResults: Bool) {
+    func configure(_ entry: AndroidEntry, icons: Bool, searchResults: Bool, widths: [CGFloat]) {
+        NSLayoutConstraint.deactivate(columnConstraints)
+        columnConstraints = []
         view.subviews.forEach { $0.removeFromSuperview() }
         let image = NSImageView(image: NSWorkspace.shared.icon(for: fileType(entry)))
         image.imageScaling = .scaleProportionallyDown
@@ -46,17 +49,25 @@ final class FileItem: NSCollectionViewItem {
             nameGroup.addArrangedSubview(location)
             location.widthAnchor.constraint(lessThanOrEqualTo: nameGroup.widthAnchor).isActive = true
         }
-        let stack = NSStackView(views: [image, icons ? name : nameGroup])
-        if !icons {
-            for column in FileColumn.allCases.dropFirst() {
+        let stack: NSStackView
+        if icons {
+            stack = NSStackView(views: [image, name])
+        } else {
+            let nameCell = NSStackView(views: [image, nameGroup])
+            nameCell.spacing = 7
+            nameCell.alignment = .centerY
+            let metadata = FileColumn.allCases.dropFirst().map { column in
                 let cell = NSTextField(labelWithString: column.displayValue(for: entry))
                 cell.lineBreakMode = .byTruncatingTail
                 cell.toolTip = cell.stringValue
-                stack.addArrangedSubview(cell)
-                if let width = column.width {
-                    cell.widthAnchor.constraint(equalToConstant: width).isActive = true
-                }
+                return cell
             }
+            let cells: [NSView] = [nameCell] + metadata
+            stack = NSStackView(views: cells)
+            columnConstraints = zip(cells, widths).map { cell, width in
+                cell.widthAnchor.constraint(equalToConstant: width)
+            }
+            NSLayoutConstraint.activate(columnConstraints)
         }
         stack.orientation = icons ? .vertical : .horizontal
         stack.alignment = icons ? .centerX : .centerY
@@ -75,6 +86,12 @@ final class FileItem: NSCollectionViewItem {
         name.alignment = icons ? .center : .left
         view.toolTip = entry.FullPath
         updateSelection()
+    }
+
+    func setColumnWidths(_ widths: [CGFloat]) {
+        for (constraint, width) in zip(columnConstraints, widths) {
+            constraint.constant = width
+        }
     }
 
     override var isSelected: Bool { didSet { updateSelection() } }
@@ -117,6 +134,11 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private let status = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
     private let columnHeader = NSStackView()
+    private let columnMinimums = FileColumn.allCases.map(\.minimumWidth)
+    private var columnWeights: [CGFloat] = [0.63, 0.13, 0.06, 0.09, 0.09]
+    private var columnWidths: [CGFloat] = []
+    private var headerWidths: [NSLayoutConstraint] = []
+    private var columnButtons: [NSButton] = []
     private var sortColumn = FileColumn.name
     private var sortAscending = true
     private var searchRequest: SearchRequest?
@@ -174,6 +196,9 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         scroll.documentView = browser
+        scroll.contentView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(updateColumnWidths),
+                                               name: NSView.frameDidChangeNotification, object: scroll.contentView)
 
         let modes = NSSegmentedControl(labels: ["Liste", "Icônes"], trackingMode: .selectOne,
                                        target: self, action: #selector(changeMode(_:)))
@@ -192,6 +217,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         pathScroll.documentView = breadcrumbs
 
         configureColumnHeader()
+        updateColumnWidths()
         let stack = NSStackView(views: [toolbar, pathScroll, columnHeader, scroll, status])
         stack.setCustomSpacing(2, after: columnHeader)
         stack.orientation = .vertical
@@ -208,7 +234,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
             toolbar.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            columnHeader.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor, constant: -7),
+            columnHeader.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor, constant: -6),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pathScroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pathScroll.heightAnchor.constraint(equalToConstant: 27),
@@ -287,6 +313,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     @objc private func changeMode(_ sender: NSSegmentedControl) {
         icons = sender.selectedSegment == 1
         columnHeader.isHidden = icons
+        updateColumnWidths()
         let selection = browser.selectionIndexPaths
         browser.collectionViewLayout?.invalidateLayout()
         browser.reloadData()
@@ -297,20 +324,67 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private func configureColumnHeader() {
         columnHeader.spacing = 7
         columnHeader.edgeInsets = NSEdgeInsets(top: 0, left: 13, bottom: 0, right: 6)
-        for column in FileColumn.allCases {
+        for (index, column) in FileColumn.allCases.enumerated() {
             let button = NSButton(title: column.rawValue, target: self, action: #selector(sortByColumn(_:)))
             button.identifier = NSUserInterfaceItemIdentifier(column.rawValue)
             button.isBordered = false
             button.alignment = .left
             button.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
-            columnHeader.addArrangedSubview(button)
-            if let width = column.width {
-                button.widthAnchor.constraint(equalToConstant: width).isActive = true
-            } else {
-                button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            columnButtons.append(button)
+            let cell = NSStackView(views: [button])
+            cell.spacing = 0
+            if index + 1 < FileColumn.allCases.count {
+                let divider = ColumnDivider()
+                divider.widthAnchor.constraint(equalToConstant: 8).isActive = true
+                divider.heightAnchor.constraint(equalToConstant: 18).isActive = true
+                var startWidths: [CGFloat] = []
+                divider.beginResize = { [weak self] in startWidths = self?.columnWidths ?? [] }
+                divider.resize = { [weak self] delta in
+                    self?.resizeColumn(at: index, from: startWidths, by: delta)
+                }
+                cell.addArrangedSubview(divider)
             }
+            columnHeader.addArrangedSubview(cell)
+            let width = cell.widthAnchor.constraint(equalToConstant: columnMinimums[index])
+            headerWidths.append(width)
+            width.isActive = true
         }
         updateSortHeader()
+    }
+
+    @objc private func updateColumnWidths() {
+        let viewport = browser.enclosingScrollView?.contentSize.width ?? 0
+        let available = (viewport > 0 ? viewport : window.frame.width - 24) - 13 - 12 - 7 * CGFloat(columnMinimums.count - 1)
+        let extra = max(0, available - columnMinimums.reduce(0, +))
+        applyColumnWidths(zip(columnMinimums, columnWeights).map { $0 + extra * $1 })
+        browser.collectionViewLayout?.invalidateLayout()
+    }
+
+    private func resizeColumn(at index: Int, from start: [CGFloat], by delta: CGFloat) {
+        guard start.count == columnMinimums.count else { return }
+        let next = index + 1
+        let minimumDelta = columnMinimums[index] - start[index]
+        let maximumDelta = start[next] - columnMinimums[next]
+        let movement = min(maximumDelta, max(minimumDelta, delta))
+        var widths = start
+        widths[index] += movement
+        widths[next] -= movement
+        let extra = widths.reduce(0, +) - columnMinimums.reduce(0, +)
+        if extra > 0 {
+            columnWeights = zip(widths, columnMinimums).map { ($0 - $1) / extra }
+        }
+        applyColumnWidths(widths)
+    }
+
+    private func applyColumnWidths(_ widths: [CGFloat]) {
+        columnWidths = widths
+        for (constraint, width) in zip(headerWidths, widths) {
+            constraint.constant = width
+        }
+        for case let item as FileItem in browser.visibleItems() {
+            item.setColumnWidths(widths)
+        }
     }
 
     @objc private func sortByColumn(_ sender: NSButton) {
@@ -339,7 +413,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func updateSortHeader() {
-        for case let button as NSButton in columnHeader.arrangedSubviews {
+        for button in columnButtons {
             guard let label = button.identifier?.rawValue else { continue }
             button.title = label == sortColumn.rawValue ? label + (sortAscending ? " ↑" : " ↓") : label
         }
@@ -717,7 +791,8 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: FileItem.identifier, for: indexPath) as! FileItem
-        item.configure(entries[indexPath.item], icons: icons, searchResults: showingSearchResults && !icons)
+        item.configure(entries[indexPath.item], icons: icons, searchResults: showingSearchResults && !icons,
+                       widths: columnWidths)
         return item
     }
 

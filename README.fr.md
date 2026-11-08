@@ -21,7 +21,7 @@ Les outils en ligne de commande Xcode sont requis (`xcode-select --install`). Br
 
 La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le téléphone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). Cette première version utilise le premier stockage exposé par le téléphone et affiche un état pendant les opérations.
 
-La vue Liste affiche le nom, le type, la taille et les dates de modification et de création lorsque le téléphone les fournit. Clique sur un en-tête pour trier, puis clique à nouveau pour inverser l’ordre. Le champ de recherche filtre les noms des fichiers dans le dossier courant et ses sous-dossiers, sans tenir compte des majuscules. La vue Liste indique le dossier sous le nom de chaque résultat.
+La vue Liste affiche le nom, le type, la taille et les dates de modification et de création lorsque le téléphone les fournit. Clique sur un en-tête pour trier, puis clique à nouveau pour inverser l’ordre. Fais glisser les séparateurs pour ajuster les largeurs. Les colonnes occupent toute la fenêtre, avec Nom comme colonne la plus large par défaut. Le champ de recherche filtre les noms des fichiers dans le dossier courant et ses sous-dossiers, sans tenir compte des majuscules. La vue Liste indique le dossier sous le nom de chaque résultat.
 
 ## Raccourcis clavier
 

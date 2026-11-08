@@ -21,7 +21,7 @@ The Xcode Command Line Tools are required (`xcode-select --install`). Connect on
 
 The interface uses AppKit. A bundled Go helper communicates with the phone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). The app uses the first storage volume exposed by the phone and displays the current operation.
 
-List view shows the name, kind, size, modification date, and creation date when the phone provides it. Click a heading to sort. Click it again to reverse the order. The search field matches file names in the current folder and its subfolders, ignoring case. List results show the containing folder below the file name.
+List view shows the name, kind, size, modification date, and creation date when the phone provides it. Click a heading to sort. Click it again to reverse the order. Drag the dividers to resize columns. The columns fill the window, and Name is widest by default. The search field matches file names in the current folder and its subfolders, ignoring case. List results show the containing folder below the file name.
 
 ## Keyboard shortcuts
 
