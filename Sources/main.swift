@@ -1,5 +1,6 @@
 import AppKit
 import Quartz
+import ServiceManagement
 import UniformTypeIdentifiers
 
 final class BrowserView: NSCollectionView {
@@ -96,6 +97,7 @@ final class FilePromise: NSObject, NSFilePromiseProviderDelegate {
 final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout,
                  QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     private let mtp = MTP()
+    private let usbAgent = SMAppService.agent(plistName: "com.tmosmant.android-finder.usb.plist")
     private let browser = BrowserView()
     private let breadcrumbs = NSStackView()
     private let status = NSTextField(labelWithString: "")
@@ -168,6 +170,8 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Ouverture automatique sur USB…", action: #selector(toggleUSBLaunch), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quitter Android Finder", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         NSApp.mainMenu = mainMenu
@@ -177,6 +181,32 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         NSApp.activate(ignoringOtherApps: true)
         updatePath()
         refresh()
+    }
+
+    @objc private func toggleUSBLaunch() {
+        do {
+            switch usbAgent.status {
+            case .enabled:
+                try usbAgent.unregister()
+                status.stringValue = "Ouverture automatique désactivée."
+            case .requiresApproval:
+                SMAppService.openSystemSettingsLoginItems()
+            default:
+                try usbAgent.register()
+                if usbAgent.status == .requiresApproval {
+                    SMAppService.openSystemSettingsLoginItems()
+                }
+                status.stringValue = "Ouverture automatique configurée pour le mode Transfert de fichiers."
+            }
+        } catch {
+            present(error)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window.makeKeyAndOrderFront(nil)
+        refresh()
+        return true
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -280,12 +310,32 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         mtp.perform({ try self.mtp.command(arguments) }) { result in
             self.busy = false
             self.refresh()
-            if case .failure(let error) = result { self.present(error) }
+            if case .failure(let error) = result {
+                if arguments.first == "upload" {
+                    self.presentCopyError(error, direction: "vers Android")
+                } else {
+                    self.present(error)
+                }
+            }
         }
     }
 
     private func present(_ error: Error) {
         NSAlert(error: error).beginSheetModal(for: window)
+    }
+
+    private func presentCopyError(_ error: Error, direction: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Copie \(direction) interrompue"
+        alert.informativeText = error.localizedDescription
+            + "\n\nSi le câble a été débranché, reconnecte le téléphone, déverrouille-le, choisis Transfert de fichiers et recommence la copie de l’élément concerné."
+        if window.attachedSheet == nil {
+            alert.beginSheetModal(for: window)
+        } else {
+            status.stringValue = alert.messageText
+            status.toolTip = alert.informativeText
+        }
     }
 
     private func preview() {
@@ -343,11 +393,13 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func collectionView(_ collectionView: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
         guard !busy else { return nil }
         let item = entries[indexPath.item]
-        let promise = FilePromise(entry: item) { [mtp] entry, url, completion in
+        let promise = FilePromise(entry: item) { [weak self, mtp] entry, url, completion in
             mtp.perform({ try mtp.download(entry, to: url) }) { result in
                 switch result {
                 case .success: completion(nil)
-                case .failure(let error): completion(error)
+                case .failure(let error):
+                    completion(error)
+                    self?.presentCopyError(error, direction: "vers le Mac")
                 }
             }
         }

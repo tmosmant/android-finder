@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
@@ -46,7 +45,6 @@ func run(args []string) error {
 	}
 	storage := storages[0].Sid
 	operation, remote := args[0], args[1]
-	progress := func(_ *mtpx.ProgressInfo, err error) error { return err }
 
 	switch operation {
 	case "list":
@@ -76,25 +74,14 @@ func run(args []string) error {
 		if len(args) < 3 {
 			return errors.New("expected at least one local path")
 		}
-		seen := make(map[string]bool)
-		for _, source := range args[2:] {
-			target := path.Join(remote, filepath.Base(source))
-			if seen[target] {
-				return fmt.Errorf("deux éléments portent le même nom : %s", target)
-			}
-			seen[target] = true
-			_, err := mtpx.GetObjectFromPath(device, storage, target)
-			if err == nil {
-				return fmt.Errorf("cet élément existe déjà : %s", target)
-			}
-			var missing mtpx.InvalidPathError
-			if !errors.As(err, &missing) {
-				return err
-			}
+		folder, err := mtpx.GetObjectFromPath(device, storage, remote)
+		if err != nil {
+			return err
 		}
-		_, _, _, err := mtpx.UploadFiles(device, storage, args[2:], remote, false,
-			func(_ *os.FileInfo, _ string, err error) error { return err }, progress)
-		return err
+		if !folder.IsDir {
+			return errors.New("la destination Android n’est pas un dossier")
+		}
+		return uploadSelection(device, storage, folder.ObjectId, args[2:])
 	case "delete":
 		for _, target := range args[1:] {
 			if target == "/" {
