@@ -5,6 +5,29 @@ struct AndroidEntry: Decodable {
     let FullPath: String
     let IsDir: Bool
     let Size: Int64
+    let Created: Date?
+    let Modified: Date?
+}
+
+final class SearchRequest {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var process: Process?
+
+    func launch(_ process: Process) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { throw CocoaError(.userCancelled) }
+        try process.run()
+        self.process = process
+    }
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning { process.terminate() }
+    }
 }
 
 final class MTP {
@@ -34,7 +57,7 @@ final class MTP {
         }
     }
 
-    func command(_ arguments: [String]) throws -> Data {
+    func command(_ arguments: [String], search: SearchRequest? = nil) throws -> Data {
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/android-mtp")
         let process = Process()
         let output = Pipe()
@@ -49,7 +72,7 @@ final class MTP {
         process.arguments = arguments
         process.standardOutput = output
         process.standardError = errors
-        try process.run()
+        if let search { try search.launch(process) } else { try process.run() }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
@@ -63,7 +86,17 @@ final class MTP {
     }
 
     func list(_ path: String) throws -> [AndroidEntry] {
-        try JSONDecoder().decode([AndroidEntry].self, from: command(["list", path]))
+        try entries(from: command(["list", path]))
+    }
+
+    func search(_ path: String, query: String, request: SearchRequest) throws -> [AndroidEntry] {
+        try entries(from: command(["search", path, query], search: request))
+    }
+
+    private func entries(from data: Data) throws -> [AndroidEntry] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return try decoder.decode([AndroidEntry].self, from: data)
     }
 
     func download(_ entry: AndroidEntry, to destination: URL) throws {

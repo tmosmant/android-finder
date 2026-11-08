@@ -24,14 +24,40 @@ final class FileItem: NSCollectionViewItem {
         view.layer?.cornerRadius = 5
     }
 
-    func configure(_ entry: AndroidEntry, icons: Bool) {
+    func configure(_ entry: AndroidEntry, icons: Bool, searchResults: Bool) {
         view.subviews.forEach { $0.removeFromSuperview() }
         let image = NSImageView(image: NSWorkspace.shared.icon(for: fileType(entry)))
         image.imageScaling = .scaleProportionallyDown
         let name = NSTextField(labelWithString: entry.Name)
         name.lineBreakMode = .byTruncatingMiddle
         name.maximumNumberOfLines = 1
-        let stack = NSStackView(views: [image, name])
+        let nameGroup = NSStackView(views: [name])
+        nameGroup.orientation = .vertical
+        nameGroup.alignment = .leading
+        nameGroup.spacing = 0
+        nameGroup.setHuggingPriority(.defaultLow, for: .horizontal)
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        if searchResults {
+            let location = NSTextField(labelWithString: (entry.FullPath as NSString).deletingLastPathComponent)
+            location.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            location.textColor = .secondaryLabelColor
+            location.lineBreakMode = .byTruncatingMiddle
+            location.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            nameGroup.addArrangedSubview(location)
+            location.widthAnchor.constraint(lessThanOrEqualTo: nameGroup.widthAnchor).isActive = true
+        }
+        let stack = NSStackView(views: [image, icons ? name : nameGroup])
+        if !icons {
+            for column in FileColumn.allCases.dropFirst() {
+                let cell = NSTextField(labelWithString: column.displayValue(for: entry))
+                cell.lineBreakMode = .byTruncatingTail
+                cell.toolTip = cell.stringValue
+                stack.addArrangedSubview(cell)
+                if let width = column.width {
+                    cell.widthAnchor.constraint(equalToConstant: width).isActive = true
+                }
+            }
+        }
         stack.orientation = icons ? .vertical : .horizontal
         stack.alignment = icons ? .centerX : .centerY
         stack.spacing = 7
@@ -44,7 +70,7 @@ final class FileItem: NSCollectionViewItem {
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
             stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            name.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor)
+            name.widthAnchor.constraint(lessThanOrEqualTo: icons ? stack.widthAnchor : nameGroup.widthAnchor)
         ])
         name.alignment = icons ? .center : .left
         view.toolTip = entry.FullPath
@@ -83,13 +109,21 @@ final class FilePromise: NSObject, NSFilePromiseProviderDelegate {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
+final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
     private let mtp = MTP()
     private let usbAgent = SMAppService.agent(plistName: "com.tmosmant.android-finder.usb.plist")
     private let browser = BrowserView()
     private let breadcrumbs = NSStackView()
     private let status = NSTextField(labelWithString: "")
-    private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 440),
+    private let searchField = NSSearchField()
+    private let columnHeader = NSStackView()
+    private var sortColumn = FileColumn.name
+    private var sortAscending = true
+    private var searchRequest: SearchRequest?
+    private var pendingSearch: DispatchWorkItem?
+    private var showingSearchResults = false
+    private var searchQuery: String { searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 470),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
     private var path = "/"
@@ -121,7 +155,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func applicationDidFinishLaunching(_ notification: Notification) {
         window.title = "Android Finder"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 380, height: 260)
+        window.minSize = NSSize(width: 640, height: 270)
         let layout = NSCollectionViewFlowLayout()
         layout.minimumLineSpacing = 3
         layout.minimumInteritemSpacing = 5
@@ -146,13 +180,20 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         modes.selectedSegment = 0
         let reload = NSButton(title: "Actualiser", target: self, action: #selector(refresh))
         let delete = NSButton(title: "Supprimer", target: self, action: #selector(deleteSelection))
-        let toolbar = NSStackView(views: [modes, reload, delete])
+        let spacer = NSView()
+        searchField.placeholderString = "Rechercher par nom"
+        searchField.toolTip = "Recherche les noms de fichiers dans ce dossier et ses sous-dossiers."
+        searchField.delegate = self
+        searchField.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        let toolbar = NSStackView(views: [modes, reload, delete, spacer, searchField])
         let pathScroll = NSScrollView()
         pathScroll.hasHorizontalScroller = true
         pathScroll.autohidesScrollers = true
         pathScroll.documentView = breadcrumbs
 
-        let stack = NSStackView(views: [toolbar, pathScroll, scroll, status])
+        configureColumnHeader()
+        let stack = NSStackView(views: [toolbar, pathScroll, columnHeader, scroll, status])
+        stack.setCustomSpacing(2, after: columnHeader)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -166,6 +207,8 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+            toolbar.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            columnHeader.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor, constant: -7),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pathScroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             pathScroll.heightAnchor.constraint(equalToConstant: 27),
@@ -223,6 +266,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isQuitting else { return .terminateLater }
         isQuitting = true
+        cancelSearch()
         status.stringValue = "Finalisation des opérations USB…"
         if previewView != nil {
             previewPanel.orderOut(nil)
@@ -242,6 +286,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     @objc private func changeMode(_ sender: NSSegmentedControl) {
         icons = sender.selectedSegment == 1
+        columnHeader.isHidden = icons
         let selection = browser.selectionIndexPaths
         browser.collectionViewLayout?.invalidateLayout()
         browser.reloadData()
@@ -249,10 +294,127 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         window.makeFirstResponder(browser)
     }
 
-    @objc private func refresh() { navigate(path) }
+    private func configureColumnHeader() {
+        columnHeader.spacing = 7
+        columnHeader.edgeInsets = NSEdgeInsets(top: 0, left: 13, bottom: 0, right: 6)
+        for column in FileColumn.allCases {
+            let button = NSButton(title: column.rawValue, target: self, action: #selector(sortByColumn(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier(column.rawValue)
+            button.isBordered = false
+            button.alignment = .left
+            button.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
+            columnHeader.addArrangedSubview(button)
+            if let width = column.width {
+                button.widthAnchor.constraint(equalToConstant: width).isActive = true
+            } else {
+                button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            }
+        }
+        updateSortHeader()
+    }
+
+    @objc private func sortByColumn(_ sender: NSButton) {
+        guard let label = sender.identifier?.rawValue, let column = FileColumn(rawValue: label) else { return }
+        let selectedPaths = Set(selection.map(\.FullPath))
+        if sortColumn == column {
+            sortAscending.toggle()
+        } else {
+            sortColumn = column
+            sortAscending = true
+        }
+        sortEntries()
+        browser.reloadData()
+        browser.selectionIndexPaths = Set(entries.indices.compactMap { index in
+            selectedPaths.contains(entries[index].FullPath) ? IndexPath(item: index, section: 0) : nil
+        })
+        updateSortHeader()
+        updatePreview()
+    }
+
+    private func sortEntries() {
+        entries.sort {
+            if sortColumn == .name, $0.IsDir != $1.IsDir { return $0.IsDir }
+            return sortColumn.compare($0, $1, ascending: sortAscending)
+        }
+    }
+
+    private func updateSortHeader() {
+        for case let button as NSButton in columnHeader.arrangedSubviews {
+            guard let label = button.identifier?.rawValue else { continue }
+            button.title = label == sortColumn.rawValue ? label + (sortAscending ? " ↑" : " ↓") : label
+        }
+    }
+
+    @objc private func refresh() {
+        if searchQuery.isEmpty { navigate(path) } else { scheduleSearch() }
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        if searchQuery.isEmpty {
+            cancelSearch()
+            refresh()
+        } else {
+            scheduleSearch()
+        }
+    }
+
+    func searchFieldDidEndSearching(_ sender: NSSearchField) {
+        guard searchQuery.isEmpty, showingSearchResults else { return }
+        cancelSearch()
+        refresh()
+    }
+
+    private func focusSearchResults() {
+        window.makeFirstResponder(browser)
+        selectEntry(at: 0)
+    }
+
+    private func cancelSearch() {
+        pendingSearch?.cancel()
+        pendingSearch = nil
+        searchRequest?.cancel()
+        searchRequest = nil
+    }
+
+    private func scheduleSearch() {
+        cancelSearch()
+        guard !isQuitting else { return }
+        let query = searchQuery
+        let folder = path
+        let request = SearchRequest()
+        searchRequest = request
+        showingSearchResults = true
+        browser.deselectAll(nil)
+        entries = []
+        browser.reloadData()
+        updatePreview()
+        status.stringValue = "Recherche par nom…"
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.searchRequest === request else { return }
+            self.mtp.perform({ try self.mtp.search(folder, query: query, request: request) }) { result in
+                guard !self.isQuitting, self.searchRequest === request else { return }
+                self.searchRequest = nil
+                switch result {
+                case .success(let matches):
+                    self.entries = matches
+                    self.sortEntries()
+                    self.browser.reloadData()
+                    self.status.stringValue = "\(matches.count) résultat(s)"
+                case .failure(let error):
+                    self.status.stringValue = "Recherche interrompue. \(error.localizedDescription)"
+                }
+                self.status.toolTip = self.status.stringValue
+            }
+        }
+        pendingSearch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300), execute: work)
+    }
 
     private func navigate(_ destination: String, selecting child: String? = nil, focusFiles: Bool = false) {
         guard !isQuitting, !busy else { return }
+        cancelSearch()
+        if destination != path { searchField.stringValue = "" }
+        showingSearchResults = false
         busy = true
         status.stringValue = "Lecture du téléphone…"
         mtp.perform({ try self.mtp.list(destination) }) { result in
@@ -261,10 +423,13 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             switch result {
             case .success(let contents):
                 self.path = destination
-                self.entries = contents.sorted {
-                    if $0.IsDir != $1.IsDir { return $0.IsDir }
-                    return $0.Name.localizedStandardCompare($1.Name) == .orderedAscending
+                if !self.searchQuery.isEmpty {
+                    self.updatePath()
+                    self.scheduleSearch()
+                    return
                 }
+                self.entries = contents
+                self.sortEntries()
                 self.browser.deselectAll(nil)
                 self.browser.reloadData()
                 self.updatePath()
@@ -391,6 +556,10 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             case 125:
                 openSelection()
                 return true
+            case 3: // F
+                window.makeFirstResponder(searchField)
+                searchField.selectText(nil)
+                return true
             case 15: // R
                 refresh()
                 return true
@@ -400,6 +569,17 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         }
         guard modifiers.isEmpty else { return false }
         let focused = window.firstResponder === browser
+        if let editor = searchField.currentEditor(), window.firstResponder === editor {
+            switch event.keyCode {
+            case 123, 124:
+                return false
+            case 36, 76:
+                focusSearchResults()
+                return true
+            default:
+                break
+            }
+        }
         switch event.keyCode {
         case 123...126:
             if !focused && !inPreview {
@@ -416,6 +596,11 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             return true
         case 53 where panel != nil:
             panel?.close()
+            return true
+        case 53 where !searchQuery.isEmpty:
+            searchField.stringValue = ""
+            cancelSearch()
+            refresh()
             return true
         case 36, 76:
             guard focused || inPreview else { return false }
@@ -532,14 +717,14 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: FileItem.identifier, for: indexPath) as! FileItem
-        item.configure(entries[indexPath.item], icons: icons)
+        item.configure(entries[indexPath.item], icons: icons, searchResults: showingSearchResults && !icons)
         return item
     }
 
     func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout,
                         sizeForItemAt indexPath: IndexPath) -> NSSize {
         if icons { return NSSize(width: 110, height: 77) }
-        return NSSize(width: max(100, (collectionView.enclosingScrollView?.contentSize.width ?? 300) - 13), height: 28)
+        return NSSize(width: max(100, (collectionView.enclosingScrollView?.contentSize.width ?? 300) - 13), height: showingSearchResults ? 38 : 28)
     }
 
     func collectionView(_ collectionView: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {

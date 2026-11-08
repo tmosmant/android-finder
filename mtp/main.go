@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
 )
@@ -15,16 +19,24 @@ type entry struct {
 	FullPath string
 	IsDir    bool
 	Size     int64
+	Created  *int64 `json:",omitempty"`
+	Modified *int64 `json:",omitempty"`
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	ctx := context.Background()
+	if len(os.Args) > 1 && os.Args[1] == "search" {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, syscall.SIGTERM)
+		defer stop()
+	}
+	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(ctx context.Context, args []string) error {
 	if len(args) < 2 {
 		return errors.New("expected an operation and an Android path")
 	}
@@ -50,7 +62,7 @@ func run(args []string) error {
 	operation, remote := args[0], args[1]
 
 	switch operation {
-	case "list":
+	case "list", "search":
 		folder, err := findObject(device, storage, remote)
 		if err != nil {
 			return err
@@ -58,17 +70,16 @@ func run(args []string) error {
 		if !folder.IsDir {
 			return fmt.Errorf("ce chemin ne désigne pas un dossier : %s", remote)
 		}
-		handles, err := objectHandles(device, storage, folder.handle)
-		if err != nil {
-			return err
-		}
-		entries := make([]entry, 0, len(handles))
-		for _, handle := range handles {
-			info, err := readObject(device, handle, folder.FullPath)
-			if err != nil {
-				return err
+		var query string
+		if operation == "search" {
+			if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+				return errors.New("un terme de recherche est requis")
 			}
-			entries = append(entries, info.entry)
+			query = strings.ToLower(strings.TrimSpace(args[2]))
+		}
+		entries := []entry{}
+		if err := collectEntries(ctx, device, storage, folder, query, &entries); err != nil {
+			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(entries)
 	case "download":
@@ -109,6 +120,33 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown operation %q", operation)
 	}
+}
+
+func collectEntries(ctx context.Context, device *mtp.Device, storage uint32, folder androidObject, query string, entries *[]entry) error {
+	handles, err := objectHandles(device, storage, folder.handle)
+	if err != nil {
+		return err
+	}
+	for _, handle := range handles {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := readObject(device, handle, folder.FullPath)
+		if err != nil {
+			return err
+		}
+		switch {
+		case query == "":
+			*entries = append(*entries, info.entry)
+		case info.IsDir:
+			if err := collectEntries(ctx, device, storage, info, query, entries); err != nil {
+				return err
+			}
+		case strings.Contains(strings.ToLower(info.Name), query):
+			*entries = append(*entries, info.entry)
+		}
+	}
+	return nil
 }
 
 // Copy into a staging directory. Any unreadable object fails the entire copy.

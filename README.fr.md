@@ -21,6 +21,8 @@ Les outils en ligne de commande Xcode sont requis (`xcode-select --install`). Br
 
 La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le téléphone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). Cette première version utilise le premier stockage exposé par le téléphone et affiche un état pendant les opérations.
 
+La vue Liste affiche le nom, le type, la taille et les dates de modification et de création lorsque le téléphone les fournit. Clique sur un en-tête pour trier, puis clique à nouveau pour inverser l’ordre. Le champ de recherche filtre les noms des fichiers dans le dossier courant et ses sous-dossiers, sans tenir compte des majuscules. La vue Liste indique le dossier sous le nom de chaque résultat.
+
 ## Raccourcis clavier
 
 - **↑ / ↓** — parcourir la liste. En vue Icônes, les quatre flèches suivent la grille.
@@ -29,6 +31,7 @@ La fenêtre utilise AppKit. Un exécutable Go embarqué communique avec le tél�
 - **Retour** ou **⌘ ↓** — ouvrir le dossier sélectionné ou prévisualiser le fichier.
 - **Espace** — ouvrir ou fermer Quick Look. Les flèches continuent de changer la sélection et l’aperçu suit. **Échap** ferme aussi l’aperçu.
 - **⌫** — demander la suppression de la sélection.
+- **⌘ F** place le focus dans la recherche. **Entrée** ou **↓** passe aux résultats. **Échap** efface la recherche lorsque Quick Look est fermé.
 - **⌘ R** — actualiser le dossier courant. **⌘ Q** — quitter l’app.
 
 ## Installation et lancement USB

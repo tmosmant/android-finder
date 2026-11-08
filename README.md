@@ -21,6 +21,8 @@ The Xcode Command Line Tools are required (`xcode-select --install`). Connect on
 
 The interface uses AppKit. A bundled Go helper communicates with the phone via [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs). The app uses the first storage volume exposed by the phone and displays the current operation.
 
+List view shows the name, kind, size, modification date, and creation date when the phone provides it. Click a heading to sort. Click it again to reverse the order. The search field matches file names in the current folder and its subfolders, ignoring case. List results show the containing folder below the file name.
+
 ## Keyboard shortcuts
 
 - **↑ / ↓** move through List view. In Icon view, all four arrow keys navigate the grid.
@@ -29,6 +31,7 @@ The interface uses AppKit. A bundled Go helper communicates with the phone via [
 - **Return** or **⌘ ↓** opens the selected folder or previews the selected file.
 - **Space** opens or closes Quick Look. The preview follows the selection as you use the arrow keys. **Escape** also closes it.
 - **⌫** asks for confirmation before deleting the selection.
+- **⌘ F** focuses search. **Return** or **↓** moves focus to the results. **Escape** clears the search when Quick Look is closed.
 - **⌘ R** refreshes the current folder. **⌘ Q** quits the app.
 
 ## Installation and automatic USB launch
