@@ -18,14 +18,14 @@ swift_target="$(uname -m)-apple-macos$MACOSX_DEPLOYMENT_TARGET"
   go build -o "../$contents/MacOS/android-mtp" .
   for module in go-mtpfs usb; do
     module_dir=$(go list -m -f '{{.Dir}}' "github.com/ganeshrvel/$module")
-    cp "$module_dir/LICENSE" "../$contents/Resources/$module-LICENSE"
+    cp -f "$module_dir/LICENSE" "../$contents/Resources/$module-LICENSE"
   done
   go_root=$(go env GOROOT)
   go_license="$go_root/LICENSE"
   if [[ ! -f "$go_license" ]]; then
     go_license="$(dirname "$go_root")/LICENSE"
   fi
-  cp "$go_license" "../$contents/Resources/Go-LICENSE"
+  cp -f "$go_license" "../$contents/Resources/Go-LICENSE"
 )
 libusb=$(pkg-config --variable=libdir libusb-1.0)
 dependency=$(otool -L "$contents/MacOS/android-mtp" | awk '/libusb/ {print $1}')
@@ -34,7 +34,7 @@ chmod u+w "$contents/Frameworks/libusb-1.0.0.dylib"
 install_name_tool -id '@rpath/libusb-1.0.0.dylib' "$contents/Frameworks/libusb-1.0.0.dylib"
 install_name_tool -change "$dependency" '@executable_path/../Frameworks/libusb-1.0.0.dylib' "$contents/MacOS/android-mtp"
 libusb_prefix=$(pkg-config --variable=prefix libusb-1.0)
-cp "$libusb_prefix/COPYING" "$contents/Resources/libusb-COPYING"
+cp -f "$libusb_prefix/COPYING" "$contents/Resources/libusb-COPYING"
 if [[ -n "${ANDROID_FINDER_LIBUSB_SOURCE:-}" ]]; then
   cp "$ANDROID_FINDER_LIBUSB_SOURCE" "$contents/Resources/"
 fi
