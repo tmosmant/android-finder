@@ -52,8 +52,8 @@ When copying to the Mac, the app stages each item and places it at its final des
 Download the Apple Silicon DMG and its checksum from [Releases](https://github.com/tmosmant/android-finder/releases). The [build workflow](.github/workflows/release.yml) runs on a GitHub-hosted Mac and attests the DMG against its source commit. With the GitHub CLI, check both the digest and the provenance from your download folder.
 
 ```sh
-shasum -a 256 -c "Android Finder.dmg.sha256"
-gh attestation verify "Android Finder.dmg" \
+shasum -a 256 -c "Android-Finder.dmg.sha256"
+gh attestation verify "Android-Finder.dmg" \
   --repo tmosmant/android-finder \
   --signer-workflow tmosmant/android-finder/.github/workflows/release.yml \
   --deny-self-hosted-runners

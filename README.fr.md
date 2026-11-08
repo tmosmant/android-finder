@@ -52,8 +52,8 @@ Vers le Mac, l’app copie chaque fichier ou dossier dans un emplacement tempora
 Télécharge le DMG Apple Silicon et son empreinte depuis les [versions publiées](https://github.com/tmosmant/android-finder/releases). Le [workflow de compilation](.github/workflows/release.yml) s’exécute sur un Mac hébergé par GitHub et associe le DMG à son commit source dans une attestation. Avec GitHub CLI, vérifie l’empreinte et l’attestation depuis ton dossier de téléchargement.
 
 ```sh
-shasum -a 256 -c "Android Finder.dmg.sha256"
-gh attestation verify "Android Finder.dmg" \
+shasum -a 256 -c "Android-Finder.dmg.sha256"
+gh attestation verify "Android-Finder.dmg" \
   --repo tmosmant/android-finder \
   --signer-workflow tmosmant/android-finder/.github/workflows/release.yml \
   --deny-self-hosted-runners
