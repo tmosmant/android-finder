@@ -96,19 +96,23 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private var entries: [AndroidEntry] = []
     private var icons = false
     private var busy = false
+    private var isQuitting = false
     private var keyMonitor: Any?
-    private lazy var previewView = QLPreviewView(frame: .zero, style: .normal)!
+    private var previewView: QLPreviewView?
     private lazy var previewPanel: NSPanel = {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 460),
                             styleMask: [.titled, .closable, .resizable, .utilityWindow],
                             backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
-        panel.contentView = previewView
+        let view = QLPreviewView(frame: .zero, style: .normal)
+        view?.shouldCloseWithWindow = false
+        panel.contentView = view
+        previewView = view
         panel.center()
         return panel
     }()
     private var previewURL: URL? {
-        didSet { previewView.previewItem = previewURL as NSURL? }
+        didSet { previewView?.previewItem = previewURL as NSURL? }
     }
     private var previewPath: String?
     private var previewLoading = false
@@ -116,6 +120,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         window.title = "Android Finder"
+        window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 380, height: 260)
         let layout = NSCollectionViewFlowLayout()
         layout.minimumLineSpacing = 3
@@ -215,6 +220,21 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isQuitting else { return .terminateLater }
+        isQuitting = true
+        status.stringValue = "Finalisation des opérations USB…"
+        if previewView != nil {
+            previewPanel.orderOut(nil)
+            previewURL = nil
+            previewView?.close()
+        }
+        mtp.finish {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         try? FileManager.default.removeItem(at: cache)
@@ -232,11 +252,12 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     @objc private func refresh() { navigate(path) }
 
     private func navigate(_ destination: String, selecting child: String? = nil, focusFiles: Bool = false) {
-        guard !busy else { return }
+        guard !isQuitting, !busy else { return }
         busy = true
         status.stringValue = "Lecture du téléphone…"
         mtp.perform({ try self.mtp.list(destination) }) { result in
             self.busy = false
+            guard !self.isQuitting else { return }
             switch result {
             case .success(let contents):
                 self.path = destination
@@ -301,7 +322,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     @objc private func deleteSelection() {
         let selected = selection
-        guard !busy, !selected.isEmpty else { return }
+        guard !isQuitting, !busy, !selected.isEmpty else { return }
         let alert = NSAlert()
         alert.messageText = "Supprimer \(selected.count) élément(s) du téléphone ?"
         alert.informativeText = "La suppression est définitive."
@@ -315,11 +336,12 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func mutate(_ arguments: [String], status message: String) {
-        guard !busy else { return }
+        guard !isQuitting, !busy else { return }
         busy = true
         status.stringValue = message
         mtp.perform({ try self.mtp.command(arguments) }) { result in
             self.busy = false
+            guard !self.isQuitting else { return }
             self.refresh()
             if case .failure(let error) = result {
                 if arguments.first == "upload" {
@@ -336,6 +358,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func presentCopyError(_ error: Error, direction: String) {
+        guard !isQuitting else { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Copie \(direction) interrompue"
@@ -352,6 +375,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private var visiblePreview: NSPanel? { previewPanel.isVisible ? previewPanel : nil }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        guard !isQuitting else { return false }
         let panel = visiblePreview
         let inPreview = panel != nil && event.window === panel
         guard window.attachedSheet == nil, event.window === window || inPreview else { return false }
@@ -438,8 +462,9 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func showPreview() {
-        guard let item = selection.first, !item.IsDir else { return }
+        guard !isQuitting, let item = selection.first, !item.IsDir else { return }
         let panel = previewPanel
+        guard previewView != nil else { return }
         if !panel.isVisible {
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(browser)
@@ -451,7 +476,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func updatePreview() {
-        guard let panel = visiblePreview else { return }
+        guard !isQuitting, let panel = visiblePreview else { return }
         let item = selection.first.flatMap { $0.IsDir ? nil : $0 }
         if previewPath != item?.FullPath {
             previewPath = nil
@@ -469,6 +494,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             return url
         }) { result in
             self.previewLoading = false
+            guard !self.isQuitting else { return }
             if !self.busy { self.status.stringValue = "\(self.entries.count) éléments" }
             guard self.visiblePreview != nil else { return }
             guard self.selection.first?.FullPath == item.FullPath else {
@@ -517,7 +543,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     func collectionView(_ collectionView: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> NSPasteboardWriting? {
-        guard !busy else { return nil }
+        guard !isQuitting, !busy else { return nil }
         let item = entries[indexPath.item]
         let promise = FilePromise(entry: item) { [weak self, mtp] entry, url, completion in
             mtp.perform({ try mtp.download(entry, to: url) }) { result in
@@ -537,7 +563,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func collectionView(_ collectionView: NSCollectionView, validateDrop draggingInfo: NSDraggingInfo,
                         proposedIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
                         dropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
-        guard !busy, draggingInfo.draggingSource as? NSCollectionView !== collectionView,
+        guard !isQuitting, !busy, draggingInfo.draggingSource as? NSCollectionView !== collectionView,
               draggingInfo.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
         else { return [] }
         dropOperation.pointee = .before
@@ -546,7 +572,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     func collectionView(_ collectionView: NSCollectionView, acceptDrop draggingInfo: NSDraggingInfo,
                         indexPath: IndexPath, dropOperation: NSCollectionView.DropOperation) -> Bool {
-        guard !busy,
+        guard !isQuitting, !busy,
               let urls = draggingInfo.draggingPasteboard.readObjects(forClasses: [NSURL.self],
                   options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
         mutate(["upload", path] + urls.map(\.path), status: "Copie vers le téléphone…")

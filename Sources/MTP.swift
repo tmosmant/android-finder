@@ -8,12 +8,29 @@ struct AndroidEntry: Decodable {
 }
 
 final class MTP {
+    private let submissions = NSLock()
+    private var closing = false
     private let queue = DispatchQueue(label: "Android Finder USB")
 
     func perform<T>(_ operation: @escaping () throws -> T, completion: @escaping (Result<T, Error>) -> Void) {
+        submissions.lock()
+        defer { submissions.unlock() }
+        guard !closing else {
+            DispatchQueue.main.async { completion(.failure(CocoaError(.userCancelled))) }
+            return
+        }
         queue.async {
             let result = Result(catching: operation)
-            DispatchQueue.main.async { completion(result) }
+            RunLoop.main.perform(inModes: [.default, .modalPanel]) { completion(result) }
+        }
+    }
+
+    func finish(_ completion: @escaping () -> Void) {
+        submissions.lock()
+        defer { submissions.unlock() }
+        closing = true
+        queue.async {
+            RunLoop.main.perform(inModes: [.default, .modalPanel], block: completion)
         }
     }
 
