@@ -1,0 +1,68 @@
+--- mtp.go
++++ mtp.go
+@@ -11 +10,0 @@
+-	"time"
+@@ -95,0 +95,4 @@
++	return d.close(true)
++}
++
++func (d *Device) close(endSession bool) error {
+@@ -100 +103 @@
+-	if d.session != nil {
++	if endSession && d.session != nil {
+@@ -103,8 +106,2 @@
+-		// RunTransaction runs close, so can't use CloseSession().
+-
+-		if err := d.runTransaction(&req, &rep, nil, nil, 0, EmptyProgressFunc); err != nil {
+-			err := d.h.Reset()
+-			if d.USBDebug {
+-				log.Printf("USB: Reset, err: %v", err)
+-			}
+-		}
++		// Never reset the composite USB device when MTP becomes unavailable.
++		_ = d.runTransaction(&req, &rep, nil, nil, 0, EmptyProgressFunc)
+@@ -111,0 +109 @@
++	d.session = nil
+@@ -120,0 +119 @@
++	d.claimed = false
+@@ -392 +391 @@
+-			d.Close()
++			d.close(false)
+@@ -659,2 +658 @@
+-// Configure is a robust version of OpenSession. On failure, it resets
+-// the device and reopens the device and the session.
++// Configure opens a session, recovering an already open session if possible.
+@@ -666,8 +663,0 @@
+-	}
+-
+-	err := d.OpenSession()
+-	if err == RCError(RC_SessionAlreadyOpened) {
+-		// It's open, so close the session. Fortunately, this
+-		// even works without a transaction ID, at least on Android.
+-		d.CloseSession()
+-		err = d.OpenSession()
+@@ -676,4 +666,5 @@
+-	if err != nil {
+-		log.Printf("OpenSession failed: %v; attempting reset", err)
+-		if d.h != nil {
+-			d.h.Reset()
++	err := d.OpenSession()
++	if err == RCError(RC_SessionAlreadyOpened) {
++		// Android can close an existing session even without a transaction ID.
++		if closeErr := d.CloseSession(); closeErr != nil {
++			return closeErr
+@@ -681,10 +672 @@
+-		d.Close()
+-
+-		// Give the device some rest.
+-		time.Sleep(1000 * time.Millisecond)
+-		if err := d.Open(); err != nil {
+-			return fmt.Errorf("opening after reset: %v", err)
+-		}
+-		if err := d.OpenSession(); err != nil {
+-			return fmt.Errorf("OpenSession after reset: %v", err)
+-		}
++		return d.OpenSession()
+@@ -692 +674 @@
+-	return nil
++	return err

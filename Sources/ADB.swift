@@ -24,7 +24,7 @@ struct ADB {
     }
 
     func run(_ arguments: [String], timeout: TimeInterval? = 10, request: OperationRequest? = nil,
-             input: String? = nil) throws -> Data {
+             input: String? = nil, consume: ((FileHandle) -> Void)? = nil) throws -> Data {
         let process = Process()
         let output = Pipe()
         // The ADB server can outlive its client. Keep stderr away from the output pipe.
@@ -51,7 +51,13 @@ struct ADB {
             try stdin.fileHandleForWriting.write(contentsOf: Data((input + "\n").utf8))
             try stdin.fileHandleForWriting.close()
         }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let data: Data
+        if let consume {
+            consume(output.fileHandleForReading)
+            data = Data()
+        } else {
+            data = output.fileHandleForReading.readDataToEndOfFile()
+        }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             if process.terminationReason == .uncaughtSignal {
@@ -90,6 +96,20 @@ struct ADB {
             }
     }
 
+    func usbStorage(serial: String, request: OperationRequest) throws -> WirelessStorage? {
+        let devices = String(decoding: try run(["devices", "-l"], timeout: 5, request: request), as: UTF8.self)
+        let matches = devices.split(separator: "\n").compactMap { line -> String? in
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count >= 4, fields[0] == serial, fields[1] == "device",
+                  fields.dropFirst(2).contains(where: { $0.hasPrefix("usb:") }),
+                  let field = fields.dropFirst(2).first(where: { $0.hasPrefix("transport_id:") }),
+                  let id = UInt64(field.dropFirst("transport_id:".count)) else { return nil }
+            return String(id)
+        }
+        guard matches.count == 1, let id = matches.first else { return nil }
+        return WirelessStorage(adb: self, target: serial, transportID: id)
+    }
+
     func pair(_ address: String, code: String) throws {
         let result = String(decoding: try run(["pair", address], timeout: 20, input: code), as: UTF8.self)
         guard result.contains("Successfully paired") else {
@@ -110,13 +130,22 @@ struct ADB {
 struct WirelessStorage {
     let adb: ADB
     let target: String
+    var transportID: String? = nil
 
-    private func run(_ arguments: [String], timeout: TimeInterval? = 10, request: OperationRequest? = nil) throws -> Data {
-        try adb.run(["-s", target] + arguments, timeout: timeout, request: request)
+    private func run(_ arguments: [String], timeout: TimeInterval? = 10, request: OperationRequest? = nil,
+                     consume: ((FileHandle) -> Void)? = nil) throws -> Data {
+        let selector = transportID.map { ["-t", $0] } ?? ["-s", target]
+        return try adb.run(selector + arguments, timeout: timeout, request: request, consume: consume)
     }
 
     func isReachable() -> Bool {
         (try? run(["shell", "true"], timeout: 4)) != nil
+    }
+
+    func deviceSerial(request: OperationRequest) throws -> String {
+        if transportID != nil { return target }
+        let result = try run(["shell", "-T", "getprop ro.serialno"], timeout: 4, request: request)
+        return String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func remote(_ path: String) -> String { "/sdcard" + path }
@@ -156,6 +185,39 @@ struct WirelessStorage {
             let fullPath = (path == "/" ? "" : path) + "/" + suffix
             return AndroidEntry(Name: name, FullPath: fullPath, IsDir: isDirectory, Size: isDirectory ? 0 : size, Handle: nil)
         }
+    }
+
+    func inventory(_ path: String, request: OperationRequest, consume: @escaping (FileHandle) -> Void) throws {
+        // Older Toybox versions lack -printf. Batch numeric sizes in that case
+        // and pair them with the original arguments, which may contain newlines.
+        let metadata = #"""
+        if sizes=$(stat -c '%f %s' "$@"); then
+            for file do
+                IFS= read -r size || exit 1
+                printf '%s\0m %s\0' "$file" "$size"
+            done <<EOF
+        $sizes
+        EOF
+        else
+            for file do
+                if size=$(stat -c '%f %s' "$file"); then
+                    printf '%s\0m %s\0' "$file" "$size"
+                else
+                    printf '!\0skip\0'
+                fi
+            done
+        fi
+        """#
+        let script = #"""
+        cd \#(quote(remote(path))) || exit 1
+        if [ -n "$(find . -maxdepth 0 -printf '%s' 2>/dev/null)" ]; then
+            find . -mindepth 1 \( -type d -printf '%p\0d\0' -o -type f -printf '%p\0f %s\0' \)
+        else
+            find . -mindepth 1 \( -type d -o -type f \) -exec sh -c \#(quote(metadata)) sh {} +
+        fi
+        printf '!\0%s\0' "$?"
+        """#
+        _ = try run(["shell", "-T", script], timeout: nil, request: request, consume: consume)
     }
 
     func thumbnail(_ entry: AndroidEntry, limit: Int, request: OperationRequest) throws -> Data {

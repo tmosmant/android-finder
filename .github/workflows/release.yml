@@ -48,7 +48,7 @@ jobs:
       - name: Build and verify disk image
         shell: bash
         run: |
-          (cd mtp && go test -mod=readonly ./...)
+          bash mtp/go-with-usb-fix.sh test -mod=readonly ./...
           mkdir -p dist
           ./package.sh "$PWD/dist/Android-Finder.dmg"
           cd dist

@@ -1,6 +1,7 @@
 import AppKit
 import Quartz
 import ServiceManagement
+import SwiftUI
 import UniformTypeIdentifiers
 
 private final class EmptyStateView: NSStackView {
@@ -168,8 +169,13 @@ final class FilePromise: NSObject, NSFilePromiseProviderDelegate {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
+final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
     private let mtp = MTP()
+    private let storageCache = StorageCache()
+    private var treeFinderButton: NSButton?
+    private var treeFinderWindow: NSWindow?
+    private var treeFinderModel: TreeFinderModel?
+    private var treeFinderRequest: OperationRequest?
     private var transferPanel: TransferWindow?
     private var transferWindow: TransferWindow {
         if let transferPanel { return transferPanel }
@@ -304,7 +310,9 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         let connect = NSButton(title: L10n.text("wifi.open"), target: self, action: #selector(showWirelessConnection))
         connect.image = NSImage(systemSymbolName: "wifi", accessibilityDescription: nil)
         connect.imagePosition = .imageLeading
-        let actions = NSStackView(views: [reload, delete])
+        let treeFinder = toolbarButton("list.bullet.indent", label: "tree.title", action: #selector(showTreeFinder))
+        treeFinderButton = treeFinder
+        let actions = NSStackView(views: [reload, delete, treeFinder])
         actions.spacing = 4
         let toolbar = NSStackView(views: [modes, actions, spacer, searchField, connect])
         toolbar.spacing = 12
@@ -396,6 +404,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     }
 
     private func updateBrowserState() {
+        treeFinderButton?.isEnabled = treeFinderWindow != nil || (connected && !busy)
         let transport = wireless == nil ? "USB" : "Wi-Fi"
         connectionIcon.image = NSImage(systemSymbolName: wireless == nil ? "cable.connector" : "wifi",
                                        accessibilityDescription: nil)
@@ -445,7 +454,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     private func loadVisibleThumbnail() {
         thumbnailWork = nil
         guard icons, connected, !busy, !isQuitting, searchRequest == nil, !previewLoading,
-              connectionSheet == nil, thumbnailRequest == nil, transferPanel?.isTransferring != true, window.isVisible,
+              connectionSheet == nil, treeFinderWindow == nil, thumbnailRequest == nil, transferPanel?.isTransferring != true, window.isVisible,
               !window.isMiniaturized else { return }
         let wireless = self.wireless
         let candidates = browser.indexPathsForVisibleItems().sorted().prefix(96).compactMap { index in
@@ -510,7 +519,191 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
         }
     }
 
-    private func resetBrowser(message: String) {
+    @objc private func showTreeFinder() {
+        if let treeFinderWindow {
+            treeFinderWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard connected, !busy, !isQuitting, window.attachedSheet == nil else { return }
+        let model = TreeFinderModel(scope: path)
+        let view = TreeFinderView(model: model, usb: wireless == nil, scan: { [weak self] in self?.scanStorage($0) },
+                                  reveal: { [weak self] in self?.revealStorageItem($0) },
+                                  delete: { [weak self] in self?.deleteStorageItems($0) },
+                                  close: { [weak self] in self?.closeTreeFinder() })
+        let analysis = NSWindow(contentRect: NSRect(origin: .zero, size: TreeFinderView.contentSize),
+                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                backing: .buffered, defer: false)
+        analysis.contentViewController = NSHostingController(rootView: view)
+        analysis.setContentSize(TreeFinderView.contentSize)
+        analysis.contentMinSize = TreeFinderView.minimumSize
+        analysis.title = L10n.text("tree.title")
+        analysis.isReleasedWhenClosed = false
+        analysis.delegate = self
+        let frameName = "Tree Finder"
+        if !analysis.setFrameUsingName(frameName) { analysis.center() }
+        analysis.setFrameAutosaveName(frameName)
+        treeFinderModel = model
+        treeFinderWindow = analysis
+        resetThumbnails()
+        analysis.makeKeyAndOrderFront(nil)
+        scanStorage(path)
+    }
+
+    private func scanStorage(_ scope: String) {
+        guard let model = treeFinderModel, !isQuitting else { return }
+        treeFinderRequest?.cancel()
+        let request = OperationRequest()
+        treeFinderRequest = request
+        if model.scope != scope { model.expanded = [] }
+        model.scope = scope
+        model.selection = []
+        model.root = nil
+        model.source = nil
+        model.cacheKey = nil
+        model.lastScanDate = nil
+        model.clearCachePreview()
+        model.state = .scanning
+
+        let wireless = self.wireless
+        model.usesUSBADB = false
+        model.scannedFiles = 0
+        mtp.perform(session: request, { [weak self, mtp, storageCache] in
+            try StorageInventory.scan(scope: scope, request: request, mtp: mtp, wireless: wireless,
+                                      cache: storageCache, cached: { snapshot, usesUSBADB in
+                RunLoop.main.perform(inModes: [.default, .modalPanel]) { [weak self] in
+                    guard self?.treeFinderRequest === request else { return }
+                    model.showCached(snapshot, usesUSBADB: usesUSBADB)
+                }
+            }) { root, count, usesUSBADB in
+                RunLoop.main.perform(inModes: [.default, .modalPanel]) { [weak self] in
+                    guard self?.treeFinderRequest === request else { return }
+                    model.recordProgress(root, files: count, usesUSBADB: usesUSBADB)
+                }
+            }
+        }) { [weak self] result in
+            guard let self, self.treeFinderRequest === request else { return }
+            self.treeFinderRequest = nil
+            switch result {
+            case .success(let (root, partial, usesUSBADB, source, cacheKey)):
+                model.clearCachePreview()
+                model.recordProgress(root, files: root.files, usesUSBADB: usesUSBADB)
+                model.source = source
+                model.cacheKey = cacheKey
+                model.lastScanDate = Date()
+                model.state = .ready(partial: partial)
+                if !self.connected, !usesUSBADB { self.refresh() }
+            case .failure(let error):
+                model.selection = []
+                model.state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func deleteStorageItems(_ ids: Set<String>) {
+        guard let model = treeFinderModel, let analysis = treeFinderWindow, let source = model.source,
+              let root = model.root, case .ready(let partial) = model.state,
+              analysis.attachedSheet == nil, !busy, !isQuitting else { return }
+        let cacheKey = model.cacheKey
+        let lastScanDate = model.lastScanDate ?? Date()
+        let prefix = model.scope == "/" ? "/" : model.scope + "/"
+        let candidates = Set(ids.filter { path in
+            path.hasPrefix(prefix) && path.count > prefix.count &&
+                !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })
+        })
+        let paths = candidates.sorted().filter { path in
+            var parent = (path as NSString).deletingLastPathComponent
+            while parent != "/" {
+                if candidates.contains(parent) { return false }
+                parent = (parent as NSString).deletingLastPathComponent
+            }
+            return true
+        }
+        guard !paths.isEmpty else { return }
+
+        let session = self.session
+        let alert = NSAlert()
+        alert.messageText = L10n.format("delete.confirm", paths.count)
+        let names = paths.prefix(4).joined(separator: "\n") + (paths.count > 4 ? "\n…" : "")
+        alert.informativeText = names + "\n\n" + L10n.text("delete.warning")
+        alert.addButton(withTitle: L10n.text("action.cancel"))
+        alert.addButton(withTitle: L10n.text("action.delete")).hasDestructiveAction = true
+        alert.beginSheetModal(for: analysis) { [weak self] response in
+            guard let self, response == .alertSecondButtonReturn, self.session === session,
+                  self.treeFinderModel === model, model.canDelete, !self.busy, !self.isQuitting else { return }
+            model.state = .deleting
+            self.cancelThumbnail()
+            self.busy = true
+            self.status.stringValue = L10n.text("tree.deleting")
+            self.mtp.perform(session: session, { [mtp = self.mtp, storageCache = self.storageCache] in
+                if let cacheKey { storageCache.invalidate(device: cacheKey.device) }
+                switch source {
+                case .adb(let storage):
+                    let target: WirelessStorage
+                    if storage.transportID != nil {
+                        guard let usb = try storage.adb.usbStorage(serial: storage.target, request: session),
+                              usb.transportID == storage.transportID else {
+                            throw ADB.error(L10n.text("tree.device.changed"))
+                        }
+                        target = usb
+                    } else {
+                        target = storage
+                    }
+                    try target.command(["delete"] + paths, request: session)
+                case .mtp(let serial, let storageID):
+                    _ = try mtp.command(["delete-on-usb", serial, String(storageID)] + paths)
+                }
+                let updated = root.removing(paths)
+                if let cacheKey {
+                    storageCache.save(.init(root: updated, partial: partial, date: lastScanDate), for: cacheKey)
+                }
+                return updated
+            }) { [weak self] result in
+                guard let self, self.session === session, !self.isQuitting else { return }
+                self.busy = false
+                if self.connected { self.refresh() }
+                guard self.treeFinderModel === model else { return }
+                switch result {
+                case .success(let updated):
+                    model.selection = []
+                    model.root = updated
+                    model.state = .ready(partial: partial)
+                case .failure(let error):
+                    self.scanStorage(model.scope)
+                    if let analysis = self.treeFinderWindow { NSAlert(error: error).beginSheetModal(for: analysis) }
+                }
+            }
+        }
+    }
+
+    private func revealStorageItem(_ item: StorageNode) {
+        guard connected, !busy, !isQuitting else { return }
+        window.makeKeyAndOrderFront(nil)
+        searchField.stringValue = ""
+        navigate((item.id as NSString).deletingLastPathComponent, selecting: item.id, focusFiles: true)
+    }
+
+    private func closeTreeFinder() {
+        treeFinderWindow?.close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing === treeFinderWindow else { return }
+        treeFinderRequest?.cancel()
+        treeFinderRequest = nil
+        treeFinderModel = nil
+        treeFinderWindow = nil
+        updateBrowserState()
+        scheduleThumbnails()
+        if !connected, wireless == nil, !isQuitting, window.isVisible { refresh() }
+    }
+
+    private func resetBrowser(message: String, preserveTreeScan: Bool = false) {
+        if !preserveTreeScan {
+            treeFinderRequest?.cancel()
+            treeFinderRequest = nil
+            treeFinderModel?.selection = []
+            treeFinderModel?.state = .disconnected
+        }
         resetThumbnails()
         thumbnailCache.removeAllObjects()
         listingFailed = false
@@ -554,9 +747,10 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
             let previous = usbSnapshot ?? current
             usbSnapshot = current
             if !previous.isSubset(of: current), connected || busy {
-                resetBrowser(message: L10n.text("usb.disconnected"))
+                let scanningRoot = treeFinderRequest != nil && treeFinderModel?.scope == "/"
+                resetBrowser(message: L10n.text("usb.disconnected"), preserveTreeScan: scanningRoot)
             }
-            if !current.subtracting(previous).isEmpty, !connected, !busy {
+            if !current.subtracting(previous).isEmpty, !connected, !busy, treeFinderWindow == nil {
                 refresh()
             }
         }
@@ -593,6 +787,7 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isQuitting else { return .terminateLater }
         isQuitting = true
+        closeTreeFinder()
         cancelThumbnail()
         presenceTimer?.invalidate()
         cancelSearch()
@@ -993,6 +1188,12 @@ final class App: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NS
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard !isQuitting else { return false }
+        if let treeFinderWindow, event.window === treeFinderWindow {
+            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers?.lowercased() == "w" else { return false }
+            closeTreeFinder()
+            return true
+        }
         let panel = visiblePreview
         let inPreview = panel != nil && event.window === panel
         guard window.attachedSheet == nil, event.window === window || inPreview else { return false }

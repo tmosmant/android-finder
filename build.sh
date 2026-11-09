@@ -15,7 +15,7 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 swift_target="$(uname -m)-apple-macos$MACOSX_DEPLOYMENT_TARGET"
 (
   cd mtp
-  go build -o "../$contents/MacOS/android-mtp" .
+  bash go-with-usb-fix.sh build -o "../$contents/MacOS/android-mtp" .
   for module in go-mtpfs usb; do
     module_dir=$(go list -m -f '{{.Dir}}' "github.com/ganeshrvel/$module")
     cp -f "$module_dir/LICENSE" "../$contents/Resources/$module-LICENSE"

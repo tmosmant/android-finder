@@ -34,6 +34,22 @@
 			<string>%ld items</string>
 		</dict>
 	</dict>
+	<key>tree.files</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>%ld file</string>
+			<key>other</key>
+			<string>%ld files</string>
+		</dict>
+	</dict>
 	<key>delete.confirm</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>

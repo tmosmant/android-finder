@@ -65,7 +65,8 @@ final class MTP {
         }
     }
 
-    func command(_ arguments: [String], request: OperationRequest? = nil) throws -> Data {
+    func command(_ arguments: [String], request: OperationRequest? = nil, timeout: TimeInterval? = nil,
+                 consume: ((FileHandle) -> Void)? = nil) throws -> Data {
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/android-mtp")
         let process = Process()
         let output = Pipe()
@@ -84,7 +85,18 @@ final class MTP {
         process.standardOutput = output
         process.standardError = errors
         if let request { try request.launch(process) } else { try process.run() }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let deadline = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        if let timeout { DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline) }
+        defer { deadline.cancel() }
+        let data: Data
+        if let consume {
+            consume(output.fileHandleForReading)
+            data = Data()
+        } else {
+            data = output.fileHandleForReading.readDataToEndOfFile()
+        }
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             let message = (try? String(contentsOf: errorFile, encoding: .utf8))?
@@ -102,6 +114,15 @@ final class MTP {
 
     func search(_ path: String, query: String, request: OperationRequest) throws -> [AndroidEntry] {
         try entries(from: command(["search", path, query], request: request))
+    }
+
+    func usbSerial(request: OperationRequest) throws -> String {
+        let data = try command(["usb-identity", "/"], request: request, timeout: 2)
+        return try JSONDecoder().decode(String.self, from: data)
+    }
+
+    func inventory(_ path: String, request: OperationRequest, consume: @escaping (FileHandle) -> Void) throws {
+        _ = try command(["inventory", path], request: request, consume: consume)
     }
 
     private func entries(from data: Data) throws -> [AndroidEntry] {

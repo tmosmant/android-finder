@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -24,7 +25,7 @@ type entry struct {
 
 func main() {
 	ctx := context.Background()
-	if len(os.Args) > 1 && os.Args[1] == "search" {
+	if len(os.Args) > 1 && (os.Args[1] == "search" || os.Args[1] == "inventory") {
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, syscall.SIGTERM)
 		defer stop()
@@ -36,6 +37,20 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	var expectedSerial string
+	var expectedStorage uint64
+	if len(args) > 0 && args[0] == "delete-on-usb" {
+		if len(args) < 4 || args[1] == "" {
+			return errors.New("missing USB identity or deletion target")
+		}
+		var err error
+		expectedStorage, err = strconv.ParseUint(args[2], 10, 32)
+		if err != nil {
+			return err
+		}
+		expectedSerial = args[1]
+		args = append([]string{"delete"}, args[3:]...)
+	}
 	if len(args) < 2 {
 		return errors.New(localized("expected an operation and an Android path", "une opération et un chemin Android sont requis", "se requieren una operación y una ruta de Android"))
 	}
@@ -45,9 +60,34 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	defer device.Close()
+	if expectedSerial != "" {
+		info, err := device.GetUsbInfo()
+		if err != nil {
+			return err
+		}
+		if info.SerialNumber != expectedSerial {
+			return errors.New(localized("The selected Android device has changed.", "L’appareil Android sélectionné a changé.", "El dispositivo Android seleccionado ha cambiado."))
+		}
+	}
 	device.Timeout = 15000
-	if args[0] == "thumbnail" {
+	switch args[0] {
+	case "usb-identity":
+		// Read the USB descriptor without opening an MTP session.
+		info, err := device.GetUsbInfo()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(info.SerialNumber)
+	case "thumbnail":
 		device.Timeout = 2000
+	case "inventory":
+		device.Timeout = 5000
+		// Emit the USB identity before opening the MTP session.
+		if info, err := device.GetUsbInfo(); err == nil && info.SerialNumber != "" {
+			if _, err := fmt.Fprintf(os.Stdout, "!\x00usb %s\x00", info.SerialNumber); err != nil {
+				return err
+			}
+		}
 	}
 	if err := device.Configure(); err != nil {
 		return err
@@ -65,16 +105,25 @@ func run(ctx context.Context, args []string) error {
 		return errors.New(localized("no Android storage is accessible", "aucun stockage Android accessible", "no hay almacenamiento de Android accesible"))
 	}
 	storage := storages.Values[0]
+	if expectedSerial != "" && uint32(expectedStorage) != storage {
+		return errors.New(localized("The selected Android storage has changed.", "Le stockage Android sélectionné a changé.", "El almacenamiento de Android seleccionado ha cambiado."))
+	}
 	operation, remote := args[0], args[1]
 
 	switch operation {
-	case "list", "search":
+	case "list", "search", "inventory":
 		folder, err := findObject(device, storage, remote)
 		if err != nil {
 			return err
 		}
 		if !folder.IsDir {
 			return fmt.Errorf(localized("this path is not a folder: %s", "ce chemin ne désigne pas un dossier : %s", "esta ruta no corresponde a una carpeta: %s"), remote)
+		}
+		if operation == "inventory" {
+			if _, err := fmt.Fprintf(os.Stdout, "!\x00storage %d\x00", storage); err != nil {
+				return err
+			}
+			return inventory(ctx, device, storage, folder, os.Stdout)
 		}
 		var query string
 		if operation == "search" {
@@ -129,6 +178,9 @@ func run(ctx context.Context, args []string) error {
 }
 
 func collectEntries(ctx context.Context, device *mtp.Device, storage uint32, folder androidObject, query string, entries *[]entry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	handles, err := objectHandles(device, storage, folder.handle)
 	if err != nil {
 		return err
