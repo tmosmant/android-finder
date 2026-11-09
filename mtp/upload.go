@@ -23,7 +23,7 @@ func uploadSelection(device *mtp.Device, storage, parent uint32, sources []strin
 func uploadItem(device *mtp.Device, storage, parent uint32, source string) error {
 	name := filepath.Base(source)
 	if _, err := findChild(device, storage, parent, "", name); err == nil {
-		return fmt.Errorf("cet élément existe déjà : %s", name)
+		return fmt.Errorf(localized("this item already exists: %s", "cet élément existe déjà : %s", "este elemento ya existe: %s"), name)
 	} else {
 		if !errors.Is(err, errObjectMissing) {
 			return err
@@ -42,12 +42,12 @@ func uploadItem(device *mtp.Device, storage, parent uint32, source string) error
 			return nil
 		}
 		// A lost reply could mean the rename succeeded. Leave the complete object alone.
-		return fmt.Errorf("finalisation de %q non confirmée. Après reconnexion, vérifie %q et supprime %q s’il reste présent : %w", name, name, tempName, err)
+		return fmt.Errorf(localized("Could not confirm that %q finished copying. After reconnecting, check %q and delete %q if it’s still there: %w", "finalisation de %q non confirmée. Après reconnexion, vérifie %q et supprime %q s’il reste présent : %w", "No se pudo confirmar que terminara la copia de %q. Cuando vuelvas a conectarte, comprueba %q y elimina %q si todavía existe: %w"), name, name, tempName, err)
 	}
 	if handle != 0 && device.DeleteObject(handle) == nil {
-		return fmt.Errorf("copie de %q interrompue, élément temporaire supprimé : %w", name, err)
+		return fmt.Errorf(localized("Copying %q was interrupted and the temporary item was removed: %w", "copie de %q interrompue, élément temporaire supprimé : %w", "Se interrumpió la copia de %q y se eliminó el elemento temporal: %w"), name, err)
 	}
-	return fmt.Errorf("copie de %q interrompue. Après reconnexion, supprime %q s’il est présent : %w", name, tempName, err)
+	return fmt.Errorf(localized("Copying %q was interrupted. After reconnecting, delete %q if it’s still there: %w", "copie de %q interrompue. Après reconnexion, supprime %q s’il est présent : %w", "Se interrumpió la copia de %q. Cuando vuelvas a conectarte, elimina %q si todavía existe: %w"), name, tempName, err)
 }
 
 func send(device *mtp.Device, storage, parent uint32, source, name string) (uint32, error) {
@@ -64,7 +64,7 @@ func send(device *mtp.Device, storage, parent uint32, source, name string) (uint
 		object.ObjectFormat = mtp.OFC_Association
 	} else {
 		if !info.Mode().IsRegular() || info.Size() >= math.MaxUint32 {
-			return 0, fmt.Errorf("type ou taille non pris en charge : %s", source)
+			return 0, fmt.Errorf(localized("unsupported type or size: %s", "type ou taille non pris en charge : %s", "tipo o tamaño no compatible: %s"), source)
 		}
 		file, err = os.Open(source)
 		if err != nil {

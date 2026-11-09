@@ -11,7 +11,7 @@ import (
 	"github.com/ganeshrvel/go-mtpfs/mtp"
 )
 
-var errObjectMissing = errors.New("élément Android introuvable")
+var errObjectMissing = errors.New(localized("Android item not found", "élément Android introuvable", "no se encontró el elemento en Android"))
 
 type androidObject struct {
 	entry
@@ -27,7 +27,7 @@ func readObject(device *mtp.Device, handle uint32, parentPath string) (androidOb
 
 	name := info.Filename
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
-		return androidObject{}, fmt.Errorf("nom de fichier Android invalide : %q", name)
+		return androidObject{}, fmt.Errorf(localized("invalid Android file name: %q", "nom de fichier Android invalide : %q", "nombre de archivo de Android no válido: %q"), name)
 	}
 
 	isDir := info.ObjectFormat == mtp.OFC_Association
@@ -40,12 +40,12 @@ func readObject(device *mtp.Device, handle uint32, parentPath string) (androidOb
 			return androidObject{}, err
 		}
 		if length.Value > math.MaxInt64 {
-			return androidObject{}, fmt.Errorf("fichier trop volumineux : %q", name)
+			return androidObject{}, fmt.Errorf(localized("file too large: %q", "fichier trop volumineux : %q", "archivo demasiado grande: %q"), name)
 		}
 		size = int64(length.Value)
 	}
 	return androidObject{
-		entry:  entry{Name: name, FullPath: path.Join(parentPath, name), IsDir: isDir, Size: size},
+		entry:  entry{Name: name, FullPath: path.Join(parentPath, name), IsDir: isDir, Size: size, Handle: handle},
 		handle: handle, modified: info.ModificationDate,
 	}, nil
 }
@@ -70,7 +70,7 @@ func findChild(device *mtp.Device, storage, parent uint32, parentPath, name stri
 			return readObject(device, handle, parentPath)
 		}
 	}
-	return androidObject{}, fmt.Errorf("%w : %s", errObjectMissing, path.Join(parentPath, name))
+	return androidObject{}, fmt.Errorf(localized("%w: %s", "%w : %s", "%w: %s"), errObjectMissing, path.Join(parentPath, name))
 }
 
 func findObject(device *mtp.Device, storage uint32, remote string) (androidObject, error) {
@@ -80,7 +80,7 @@ func findObject(device *mtp.Device, storage uint32, remote string) (androidObjec
 			continue
 		}
 		if !current.IsDir {
-			return androidObject{}, fmt.Errorf("ce chemin ne désigne pas un dossier : %s", current.FullPath)
+			return androidObject{}, fmt.Errorf(localized("this path is not a folder: %s", "ce chemin ne désigne pas un dossier : %s", "esta ruta no corresponde a una carpeta: %s"), current.FullPath)
 		}
 		child, err := findChild(device, storage, current.handle, current.FullPath, name)
 		if err != nil {

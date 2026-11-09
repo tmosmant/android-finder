@@ -1,18 +1,19 @@
 import AppKit
 
 enum FileColumn: String, CaseIterable {
-    case name = "Nom"
-    case kind = "Type"
-    case size = "Taille"
-    case modified = "Modifié"
-    case created = "Créé"
+    case name
+    case kind
+    case size
+    case folder
+
+    var title: String { L10n.text("column." + rawValue) }
 
     var minimumWidth: CGFloat {
         switch self {
         case .name: 120
         case .kind: 78
         case .size: 62
-        case .modified, .created: 92
+        case .folder: 120
         }
     }
 
@@ -21,8 +22,7 @@ enum FileColumn: String, CaseIterable {
         case .name: entry.Name
         case .kind: Self.kind(for: entry)
         case .size: entry.IsDir ? "—" : ByteCountFormatter.string(fromByteCount: entry.Size, countStyle: .file)
-        case .modified: entry.Modified?.formatted(date: .numeric, time: .shortened) ?? "—"
-        case .created: entry.Created?.formatted(date: .numeric, time: .shortened) ?? "—"
+        case .folder: Self.folder(for: entry)
         }
     }
 
@@ -32,8 +32,7 @@ enum FileColumn: String, CaseIterable {
         case .name: order = a.Name.localizedStandardCompare(b.Name)
         case .kind: order = Self.kind(for: a).localizedStandardCompare(Self.kind(for: b))
         case .size: order = Self.compareValues(a.Size, b.Size)
-        case .modified: order = Self.compareValues(a.Modified ?? .distantPast, b.Modified ?? .distantPast)
-        case .created: order = Self.compareValues(a.Created ?? .distantPast, b.Created ?? .distantPast)
+        case .folder: order = Self.folder(for: a).localizedStandardCompare(Self.folder(for: b))
         }
 
         if order == .orderedSame {
@@ -47,9 +46,13 @@ enum FileColumn: String, CaseIterable {
         return a < b ? .orderedAscending : .orderedDescending
     }
 
+    private static func folder(for entry: AndroidEntry) -> String {
+        (entry.FullPath as NSString).deletingLastPathComponent
+    }
+
     private static func kind(for entry: AndroidEntry) -> String {
-        if entry.IsDir { return "Dossier" }
-        return fileType(entry).localizedDescription ?? "Fichier"
+        if entry.IsDir { return FileColumn.folder.title }
+        return fileType(entry).localizedDescription ?? L10n.text("file.generic")
     }
 }
 
@@ -75,4 +78,25 @@ final class ColumnDivider: NSView {
         NSColor.separatorColor.setFill()
         NSRect(x: bounds.midX, y: 3, width: 1, height: max(0, bounds.height - 6)).fill()
     }
+}
+
+func layoutColumns(_ cells: [NSView], in row: NSView, widths: [CGFloat]) -> [NSLayoutConstraint] {
+    var previous: NSView?
+    var widthConstraints: [NSLayoutConstraint] = []
+    for (cell, width) in zip(cells, widths) {
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        cell.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addSubview(cell)
+        let fixedWidth = cell.widthAnchor.constraint(equalToConstant: width)
+        NSLayoutConstraint.activate([
+            cell.leadingAnchor.constraint(equalTo: previous?.trailingAnchor ?? row.leadingAnchor,
+                                          constant: previous == nil ? 0 : 7),
+            cell.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            fixedWidth
+        ])
+        widthConstraints.append(fixedWidth)
+        previous = cell
+    }
+    previous?.trailingAnchor.constraint(equalTo: row.trailingAnchor).isActive = true
+    return widthConstraints
 }

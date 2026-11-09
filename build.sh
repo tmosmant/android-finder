@@ -41,6 +41,7 @@ fi
 swiftc -target "$swift_target" -module-cache-path "$PWD/.build/modules" Sources/*.swift -o "$contents/MacOS/Android Finder"
 swiftc -target "$swift_target" -module-cache-path "$PWD/.build/modules" Watcher/main.swift -o "$contents/MacOS/android-usb-watcher"
 cp Info.plist "$contents/"
+cp -R Resources/*.lproj "$contents/Resources/"
 libusb_min=$(vtool -show-build "$contents/Frameworks/libusb-1.0.0.dylib" | awk '/minos/ {print $2; exit}')
 if [[ -n "$libusb_min" ]]; then
   minimum=$(printf '%s\n' "$MACOSX_DEPLOYMENT_TARGET" "$libusb_min" | sort -V | tail -1)

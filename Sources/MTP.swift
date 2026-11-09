@@ -5,11 +5,10 @@ struct AndroidEntry: Decodable {
     let FullPath: String
     let IsDir: Bool
     let Size: Int64
-    let Created: Date?
-    let Modified: Date?
+    let Handle: UInt32?
 }
 
-final class SearchRequest {
+final class OperationRequest {
     private let lock = NSLock()
     private var cancelled = false
     private var process: Process?
@@ -20,6 +19,12 @@ final class SearchRequest {
         guard !cancelled else { throw CocoaError(.userCancelled) }
         try process.run()
         self.process = process
+    }
+
+    func checkCancellation() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { throw CocoaError(.userCancelled) }
     }
 
     func cancel() {
@@ -33,9 +38,9 @@ final class SearchRequest {
 final class MTP {
     private let submissions = NSLock()
     private var closing = false
-    private let queue = DispatchQueue(label: "Android Finder USB")
+    private let queue = DispatchQueue(label: "Android Finder Transferts")
 
-    func perform<T>(_ operation: @escaping () throws -> T, completion: @escaping (Result<T, Error>) -> Void) {
+    func perform<T>(session: OperationRequest, _ operation: @escaping () throws -> T, completion: @escaping (Result<T, Error>) -> Void) {
         submissions.lock()
         defer { submissions.unlock() }
         guard !closing else {
@@ -43,7 +48,10 @@ final class MTP {
             return
         }
         queue.async {
-            let result = Result(catching: operation)
+            let result = Result {
+                try session.checkCancellation()
+                return try operation()
+            }
             RunLoop.main.perform(inModes: [.default, .modalPanel]) { completion(result) }
         }
     }
@@ -57,7 +65,7 @@ final class MTP {
         }
     }
 
-    func command(_ arguments: [String], search: SearchRequest? = nil) throws -> Data {
+    func command(_ arguments: [String], request: OperationRequest? = nil) throws -> Data {
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/android-mtp")
         let process = Process()
         let output = Pipe()
@@ -70,16 +78,19 @@ final class MTP {
         defer { try? errors.close() }
         process.executableURL = helper
         process.arguments = arguments
+        var environment = ProcessInfo.processInfo.environment
+        environment["ANDROID_FINDER_LANGUAGE"] = L10n.language
+        process.environment = environment
         process.standardOutput = output
         process.standardError = errors
-        if let search { try search.launch(process) } else { try process.run() }
+        if let request { try request.launch(process) } else { try process.run() }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             let message = (try? String(contentsOf: errorFile, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw NSError(domain: "Android Finder", code: Int(process.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: message.flatMap { $0.isEmpty ? nil : $0 } ?? "L’opération USB a échoué."
+                NSLocalizedDescriptionKey: message.flatMap { $0.isEmpty ? nil : $0 } ?? L10n.text("usb.failed")
             ])
         }
         return data
@@ -89,24 +100,28 @@ final class MTP {
         try entries(from: command(["list", path]))
     }
 
-    func search(_ path: String, query: String, request: SearchRequest) throws -> [AndroidEntry] {
-        try entries(from: command(["search", path, query], search: request))
+    func search(_ path: String, query: String, request: OperationRequest) throws -> [AndroidEntry] {
+        try entries(from: command(["search", path, query], request: request))
     }
 
     private func entries(from data: Data) throws -> [AndroidEntry] {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .secondsSince1970
-        return try decoder.decode([AndroidEntry].self, from: data)
+        try JSONDecoder().decode([AndroidEntry].self, from: data)
     }
 
-    func download(_ entry: AndroidEntry, to destination: URL) throws {
+    func download(_ entry: AndroidEntry, to destination: URL, wireless: WirelessStorage?, request: OperationRequest,
+                  onStage: ((URL) -> Void)? = nil) throws {
         let files = FileManager.default
         let stage = destination.deletingLastPathComponent()
             .appendingPathComponent(".android-finder-\(UUID().uuidString)", isDirectory: true)
         try files.createDirectory(at: stage, withIntermediateDirectories: false)
         defer { try? files.removeItem(at: stage) }
-        _ = try command(["download", entry.FullPath, stage.path])
         let downloaded = stage.appendingPathComponent(entry.Name, isDirectory: entry.IsDir)
+        onStage?(downloaded)
+        if let wireless {
+            try wireless.download(entry, to: stage, request: request)
+        } else {
+            _ = try command(["download", entry.FullPath, stage.path])
+        }
         try files.moveItem(at: downloaded, to: destination)
     }
 }

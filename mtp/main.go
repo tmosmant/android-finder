@@ -19,8 +19,7 @@ type entry struct {
 	FullPath string
 	IsDir    bool
 	Size     int64
-	Created  *int64 `json:",omitempty"`
-	Modified *int64 `json:",omitempty"`
+	Handle   uint32 `json:",omitempty"`
 }
 
 func main() {
@@ -38,7 +37,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) < 2 {
-		return errors.New("expected an operation and an Android path")
+		return errors.New(localized("expected an operation and an Android path", "une opération et un chemin Android sont requis", "se requieren una operación y una ruta de Android"))
 	}
 
 	device, err := mtp.SelectDevice("")
@@ -47,8 +46,15 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer device.Close()
 	device.Timeout = 15000
+	if args[0] == "thumbnail" {
+		device.Timeout = 2000
+	}
 	if err := device.Configure(); err != nil {
 		return err
+	}
+
+	if args[0] == "thumbnail" {
+		return thumbnail(device, args)
 	}
 
 	var storages mtp.Uint32Array
@@ -56,7 +62,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(storages.Values) == 0 {
-		return errors.New("aucun stockage Android accessible")
+		return errors.New(localized("no Android storage is accessible", "aucun stockage Android accessible", "no hay almacenamiento de Android accesible"))
 	}
 	storage := storages.Values[0]
 	operation, remote := args[0], args[1]
@@ -68,12 +74,12 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		if !folder.IsDir {
-			return fmt.Errorf("ce chemin ne désigne pas un dossier : %s", remote)
+			return fmt.Errorf(localized("this path is not a folder: %s", "ce chemin ne désigne pas un dossier : %s", "esta ruta no corresponde a una carpeta: %s"), remote)
 		}
 		var query string
 		if operation == "search" {
 			if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
-				return errors.New("un terme de recherche est requis")
+				return errors.New(localized("a search term is required", "un terme de recherche est requis", "se requiere un término de búsqueda"))
 			}
 			query = strings.ToLower(strings.TrimSpace(args[2]))
 		}
@@ -84,7 +90,7 @@ func run(ctx context.Context, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(entries)
 	case "download":
 		if len(args) != 3 || remote == "/" {
-			return errors.New("expected a file or folder and a destination directory")
+			return errors.New(localized("expected a file or folder and a destination directory", "un fichier ou dossier et un dossier de destination sont requis", "se requieren un archivo o carpeta y una carpeta de destino"))
 		}
 		info, err := findObject(device, storage, remote)
 		if err != nil {
@@ -93,20 +99,20 @@ func run(ctx context.Context, args []string) error {
 		return download(device, storage, info, args[2])
 	case "upload":
 		if len(args) < 3 {
-			return errors.New("expected at least one local path")
+			return errors.New(localized("expected at least one local path", "au moins un chemin local est requis", "se requiere al menos una ruta local"))
 		}
 		folder, err := findObject(device, storage, remote)
 		if err != nil {
 			return err
 		}
 		if !folder.IsDir {
-			return errors.New("la destination Android n’est pas un dossier")
+			return errors.New(localized("the Android destination is not a folder", "la destination Android n’est pas un dossier", "el destino en Android no es una carpeta"))
 		}
 		return uploadSelection(device, storage, folder.handle, args[2:])
 	case "delete":
 		for _, target := range args[1:] {
 			if target == "/" {
-				return errors.New("impossible de supprimer la racine du stockage")
+				return errors.New(localized("the storage root cannot be deleted", "impossible de supprimer la racine du stockage", "no se puede eliminar la raíz del almacenamiento"))
 			}
 			info, err := findObject(device, storage, target)
 			if err != nil {
@@ -118,7 +124,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown operation %q", operation)
+		return fmt.Errorf(localized("unknown operation %q", "opération inconnue %q", "operación desconocida %q"), operation)
 	}
 }
 
@@ -152,7 +158,7 @@ func collectEntries(ctx context.Context, device *mtp.Device, storage uint32, fol
 // Copy into a staging directory. Any unreadable object fails the entire copy.
 func download(device *mtp.Device, storage uint32, info androidObject, parent string) error {
 	if info.Name == "" || info.Name == "." || info.Name == ".." || filepath.Base(info.Name) != info.Name {
-		return fmt.Errorf("nom de fichier Android invalide : %q", info.Name)
+		return fmt.Errorf(localized("invalid Android file name: %q", "nom de fichier Android invalide : %q", "nombre de archivo de Android no válido: %q"), info.Name)
 	}
 	destination := filepath.Join(parent, info.Name)
 	if info.IsDir {
@@ -187,7 +193,7 @@ func download(device *mtp.Device, storage uint32, info androidObject, parent str
 			return err
 		}
 		if local.Size() != info.Size {
-			return fmt.Errorf("copie incomplète : %s (%d / %d octets)", info.Name, local.Size(), info.Size)
+			return fmt.Errorf(localized("incomplete copy: %s (%d / %d bytes)", "copie incomplète : %s (%d / %d octets)", "copia incompleta: %s (%d / %d bytes)"), info.Name, local.Size(), info.Size)
 		}
 	}
 	if !info.modified.IsZero() {
